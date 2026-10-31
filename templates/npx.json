@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "example-npx": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@scope/package-name"],
+      "env": {
+        "API_KEY": "在此填写你的密钥（不读的变量不要写）"
+      },
+      "disabled": false
+    }
+  }
+}

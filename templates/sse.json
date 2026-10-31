@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "example-remote": {
+      "type": "streamableHttp",
+      "url": "https://your-mcp-server.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer 在此填写令牌"
+      },
+      "disabled": false
+    }
+  }
+}

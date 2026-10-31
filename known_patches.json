@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "description": "MCP 配置向导 curated 补丁注册表。当某个 MCP 包存在『需要修源码才能跑/才能被严格宿主接受』的已知问题时，在此登记，向导会在 scaffold 阶段自动应用（幂等）。",
+  "patches": [
+    {
+      "id": "openpharma-fda-experimental-broadcast",
+      "description": "移除服务器在 initialize 返回的非标准 capabilities.experimental 广播（progressNotifications/cancellationSupport/extendedMetadata）。严格 MCP 宿主（如 WorkBuddy）会拒绝并报 'Invalid input'（路径 capabilities.experimental.*）。",
+      "match": { "packageName": "@openpharma-org/fda-mcp-server" },
+      "stage": "preBuild",
+      "actions": [
+        { "type": "removeObjectProperty", "fileGlob": "**/lifecycle-manager.ts", "key": "experimental" }
+      ]
+    }
+  ]
+}
