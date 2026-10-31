@@ -28,3 +28,11 @@ git clone <this-repo> ~/.workbuddy/skills/mcp-config-wizard
 - `known_patches.json` —— 已知包的预置补丁
 
 详见 [SKILL.md](SKILL.md)。
+
+## 版本管理（GitHub ↔ 技能中心 对齐）
+
+- 版本号用 SemVer（`MAJOR.MINOR.PATCH`）。
+- **GitHub tag（`vX.Y.Z`）是权威版本源**；仓库的 [CHANGELOG.md](CHANGELOG.md) 记录每次变更。
+- 发布到 WorkBuddy **技能中心**时，**填写与 GitHub tag 相同的版本号**，保证两边一致。
+- 发版流程：① 在 `CHANGELOG.md` 加一条 → ② `git tag vX.Y.Z` + `git push --tags` → ③ 在技能中心后台以同一 `X.Y.Z` 发布 / 更新。
+- 注意：技能中心不会自动从 GitHub 拉取版本，两边需手动对齐（Hub 版本在后台发布时填写，不从本仓库读取）。
