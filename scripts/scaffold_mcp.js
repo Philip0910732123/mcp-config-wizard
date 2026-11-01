@@ -8,6 +8,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync, spawn } = require('child_process');
 const lib = require('./lib');
+const lang = require('./lang');
 
 function usage() {
   console.log(`MCP 配置向导 · scaffold_mcp.js
@@ -15,25 +16,36 @@ function usage() {
 用法:
   node scaffold_mcp.js --name <服务名> <来源选项> [通用选项]
 
-来源选项（五选一）:
+来源选项（五选一 + 包抓取）:
   --from-url <url>          云端 MCP（streamableHttp），只给一个 URL
   --from-json <json|路径>   用户给的 JSON（含 mcpServers）或裸 URL 字符串
-  --from-dir <目录>         本地 MCP 包目录（含 package.json），自动复制到安装目录
-  --from-zip <zip>          本地 MCP 包 zip，解压后按目录处理
+  --from-dir <目录>         本地 MCP 包目录（Node/Python/Go/Rust/Java 等，自动识别语言）；--name 可省略（自动从目录名推断）
+  --from-zip <zip>          本地 MCP 包 zip，解压后按语言处理；--name 可省略（自动从文件名推断）
   --from-template           生成零依赖骨架（仅“自己新写 MCP”用；第三方服务禁用）
-  --index <index.js路径>    已有 index.js
+  --index <index.js路径>    已有 index.js（Node）
+  --pkg <npm包名>           npx 方式拉取（Node 包，无需本地下载）
+  --uvx-pkg <uv包名>        uvx 方式拉取（Python 包，如 kegg-mcp-server；可配 --uvx-with 加 --with 依赖）
 
 通用选项:
   --mcp-json <路径>         mcp.json 路径（默认 ~/.workbuddy/mcp.json）
   --api-key <key>           替换 URL/JSON 里的 {your_api_key} 等占位
   --env <json>              追加环境变量（如 '{"DB_USER":"u","DB_PASSWORD":"p"}'）
   --install-dir <目录>      本地包安装目录（默认 ~/.workbuddy/mcp-servers/<服务名>）
+  --lang <node|python|go|rust|java|dotnet|ruby|php>  强制指定语言（默认按标记文件自动识别）
+  --entry <入口文件>        Python 等语言手动指定入口（如 server.py）；不指定则自动识别
+  --bin <可执行文件>        直接注册一个现成的可执行程序（Go/Rust 等作者发布的 .exe，免装工具链）
+  --bin-args "<参数>"       配合 --bin 传给该程序的参数（如 "--stdio"）
+  --uv                      Python 条目用可移植的 "uv --directory run"（默认用 venv 绝对路径，最稳）
   --node <node路径>         command 用的 node（默认 "node"，可移植；仅当你确知目标机 PATH 无 node 时手动传绝对路径覆盖）
-  --npm-install             本地包缺 node_modules 时执行 npm install（需联网）
+  --npm-install             本地 Node 包缺 node_modules 时执行 npm install（需联网）
   --overwrite               安装目录已存在时覆盖
   --dry-run                 只打印，不落盘（不复制、不安装）
   --self-check              写入后启动 MCP 做握手自检，检查服务器是否广播非标准 experimental 能力
   --harden                  自检发现非标准 experimental 广播时，自动剥离并重新编译（未知包可用；已知包已由 curated 补丁处理）
+
+说明: 本地包会自动识别运行时类型（Node=package.json / Python=pyproject.toml / Go=go.mod / Rust=Cargo.toml /
+  Java=pom.xml / .NET=*.csproj / Ruby=Gemfile / PHP=composer.json）。识别后按该语言装依赖、找入口、生成 command，
+  无需你手动判断语言。详见 SKILL.md「运行时类型速查表」。
 
 设计说明: 本地型 command 默认用可移植的裸 "node"（依赖宿主 PATH 解析）；
   脚本会识别目标平台（扩展点，当前支持 workbuddy）并预检 node 可达性，但不自动改写为绝对路径
@@ -74,6 +86,14 @@ function hasPlaceholder(v) { return /(\{your[_-]?api[_-]?key\}|<your[_-]?api[_-]
 function defaultMcpJson() { return path.join(os.homedir(), '.workbuddy', 'mcp.json'); }
 function defaultInstallDir(name) { return path.join(os.homedir(), '.workbuddy', 'mcp-servers', name); }
 
+// 从路径自动推断服务名（当用户没显式给 --name 时兜底；例如 gdc-mcp-server-source.zip → gdc-mcp-server）
+function inferName(p) {
+  let base = path.basename(String(p));
+  base = base.replace(/\.(zip|tar\.gz|tgz|tar)$/i, '');
+  base = base.replace(/[-_]?source$/i, '');
+  return base || 'mcp';
+}
+
 function readMcpJson(p) {
   if (!fs.existsSync(p)) return { mcpServers: {} };
   const raw = fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, '');
@@ -81,31 +101,38 @@ function readMcpJson(p) {
   if (!j.mcpServers) j.mcpServers = {};
   return j;
 }
-function writeMcpJson(p, data) { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, JSON.stringify(data, null, 2) + '\n', 'utf8'); }
+// 执行台账：每次安装/失败追加一行 JSONL，便于批量配多个 MCP 时核对"哪些已做、哪些没做"。
+// 台账写失败绝不影响主流程（静默忽略）。
+const INSTALL_LOG = path.join(os.homedir(), '.workbuddy', 'mcp-servers', '.install-log.jsonl');
+function logInstall(rec) {
+  try {
+    fs.mkdirSync(path.dirname(INSTALL_LOG), { recursive: true });
+    fs.appendFileSync(INSTALL_LOG, JSON.stringify({ ts: new Date().toISOString(), ...rec }) + '\n', 'utf8');
+  } catch { /* 台账不是关键路径 */ }
+}
 
-function findPackageRoot(dir) {
-  if (fs.existsSync(path.join(dir, 'package.json'))) return dir;
-  let kids = []; try { kids = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
-  for (const e of kids) {
-    if (!e.isDirectory()) continue;
-    const d1 = path.join(dir, e.name);
-    if (fs.existsSync(path.join(d1, 'package.json'))) return d1;
-    let k2 = []; try { k2 = fs.readdirSync(d1, { withFileTypes: true }); } catch { continue; }
-    for (const e2 of k2) {
-      if (!e2.isDirectory()) continue;
-      const d2 = path.join(d1, e2.name);
-      if (fs.existsSync(path.join(d2, 'package.json'))) return d2;
-    }
+// 写配置：先序列化自校验 -> 备份旧文件 -> 临时文件 + 原子改名替换。
+// 目的：即使写入过程中断电/被杀进程/磁盘满，也不会留下半截 JSON 把整个 MCP 配置弄坏。
+function writeMcpJson(p, data) {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  const body = JSON.stringify(data, null, 2) + '\n';
+  JSON.parse(body); // 防御：写出的内容必须可被解析
+  if (fs.existsSync(p)) {
+    try { fs.copyFileSync(p, p + '.bak'); }
+    catch (e) { console.warn('⚠️ 旧配置备份失败（仍继续写入）:', e.message); }
   }
-  return null;
+  const tmp = p + '.tmp-' + process.pid;
+  try {
+    fs.writeFileSync(tmp, body, 'utf8');
+    fs.renameSync(tmp, p); // 同分区原子替换
+  } catch (e) {
+    try { fs.existsSync(tmp) && fs.unlinkSync(tmp); } catch { }
+    throw new Error('写入配置失败: ' + e.message + (fs.existsSync(p + '.bak') ? `\n（原配置已备份在 ${p}.bak，可还原）` : ''));
+  }
 }
 
-function detectMain(root) {
-  const pj = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-  if (pj.main) return pj.main.replace(/^\.\//, '');
-  for (const c of ['build/index.js', 'dist/index.js', 'index.js']) if (fs.existsSync(path.join(root, c))) return c;
-  return 'index.js';
-}
+// 本地包的语言识别与按语言分发已移至 lang.js（detectLang / resolveLocalPackage），
+// 支持 Node / Python / Go / Rust / Java / .NET / Ruby / PHP 等，无需在此重复。
 
 function resolveEnv(a) {
   let env = {};
@@ -155,92 +182,48 @@ function preflightNodeCheck() {
 
 function extractZip(zip, dest) {
   fs.mkdirSync(dest, { recursive: true });
+  // 1) 优先用 unzip（Git Bash / Linux / macOS 常见）
   const r = spawnSync('unzip', ['-o', zip, '-d', dest], { encoding: 'utf8' });
   if (r.error || r.status !== 0) {
+    // 2) 回退到系统自带解压（Windows: Expand-Archive）
     const cmd = `Expand-Archive -LiteralPath '${zip.replace(/'/g, "''")}' -DestinationPath '${dest.replace(/'/g, "''")}' -Force`;
     const ps = spawnSync('powershell', ['-NoProfile', '-Command', cmd], { encoding: 'utf8' });
-    if (ps.error || ps.status !== 0) throw new Error('解压失败: ' + ((ps.stderr || r.stderr || '').toString().slice(0, 300)));
-  }
-}
-
-// 编译源码包（如 TypeScript 的 tsc）：当入口文件不在 zip 内、但 package.json 有 build 脚本时调用
-function buildIfNeeded(installDir, mainAbs, a) {
-  if (fs.existsSync(mainAbs)) return true;
-  const pjPath = path.join(installDir, 'package.json');
-  let pj = {}; try { pj = JSON.parse(fs.readFileSync(pjPath, 'utf8')); } catch { }
-  const buildScript = pj.scripts && pj.scripts.build;
-  if (!buildScript) {
-    console.warn('⚠️ 入口文件缺失且 package.json 无 build 脚本，MCP 将无法启动（请确认 main 指向正确，或提供含编译产物的包）。');
-    return false;
-  }
-  console.log('🔧 检测到入口文件缺失但存在 build 脚本，开始编译源码包...');
-  // 编译需要 typescript / esbuild 等 devDependencies
-  if (!fs.existsSync(path.join(installDir, 'node_modules', 'typescript')) && !fs.existsSync(path.join(installDir, 'node_modules', 'esbuild'))) {
-    console.log('执行 npm install（含 devDependencies，编译需要 typescript 等）...');
-    const r = spawnSync('npm', ['install'], { cwd: installDir, encoding: 'utf8', shell: true, stdio: 'inherit' });
-    if (r.status !== 0) { console.warn('⚠️ npm install 失败，无法编译'); return false; }
-  }
-  console.log('执行 npm run build ...');
-  const b = spawnSync('npm', ['run', 'build'], { cwd: installDir, encoding: 'utf8', shell: true, stdio: 'inherit' });
-  if (b.status !== 0) { console.warn('⚠️ npm run build 失败'); return false; }
-  if (!fs.existsSync(mainAbs)) { console.warn('⚠️ 编译完成但入口文件仍未生成: ' + mainAbs); return false; }
-  console.log('编译完成，入口已生成 ✅');
-  return true;
-}
-
-// 安装本地包：复制到 installDir，检查/安装 node_modules，必要时编译
-function installLocalPackage(root, name, a, dryRun) {
-  const mainRel = detectMain(root);
-  const mainAbs = path.join(root, mainRel);
-  const installDir = a['install-dir'] || defaultInstallDir(name);
-  const hasNM = fs.existsSync(path.join(root, 'node_modules'));
-  // 判断是否需要编译：zip 内无入口文件、且 package.json 有 build 脚本
-  let pj = {}; try { pj = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')); } catch { }
-  const needBuild = !fs.existsSync(mainAbs) && pj.scripts && pj.scripts.build;
-  if (dryRun) {
-    console.log(`[dry-run] 包根: ${root}`);
-    console.log(`[dry-run] 将复制到: ${installDir}`);
-    console.log(`[dry-run] 入口 main: ${mainRel}` + (needBuild ? '（zip 内缺失，将自动编译生成）' : ''));
-    console.log(hasNM ? '[dry-run] 包内已含 node_modules ✅' : '[dry-run] ⚠️ 包内无 node_modules —— 运行前需 npm install（加 --npm-install）或提供含依赖的包');
-    return { installDir, mainRel };
-  }
-  if (fs.existsSync(installDir) && !a.overwrite) throw new Error('安装目录已存在: ' + installDir + '（加 --overwrite 覆盖）');
-  fs.mkdirSync(path.dirname(installDir), { recursive: true });
-  fs.cpSync(root, installDir, { recursive: true });
-  console.log('已复制包到:', installDir);
-  // 应用 curated 补丁（preBuild：作用于源码，后续 build 会带上修复；幂等）
-  let pkgName = null;
-  try { pkgName = JSON.parse(fs.readFileSync(path.join(installDir, 'package.json'), 'utf8')).name; } catch {}
-  lib.applyPatches(installDir, pkgName, 'preBuild');
-  if (!fs.existsSync(path.join(installDir, 'node_modules'))) {
-    // 需要编译时即便用户没显式 --npm-install，也要装含 devDependencies 的完整依赖（typescript 等）
-    if (a['npm-install'] || needBuild) {
-      const args = needBuild ? ['install'] : ['install', '--omit=dev'];
-      console.log(needBuild ? '缺 node_modules（且需编译），执行 npm install（含 devDependencies）...' : '缺 node_modules，执行 npm install --omit=dev ...');
-      const r = spawnSync('npm', args, { cwd: installDir, encoding: 'utf8', shell: true, stdio: 'inherit' });
-      if (r.status !== 0) console.warn('⚠️ npm install 失败，请手动在该目录执行 npm install');
-      else console.log('node_modules 安装完成 ✅');
-    } else {
-      console.warn('⚠️ 包内无 node_modules，MCP 将无法启动。加 --npm-install 允许安装，或提供含 node_modules 的完整包。');
+    if (ps.error || ps.status !== 0) {
+      // 两种方式都失败时必须给出可读原因——不要甩空错误，否则用户只会看到「解压失败:」然后放弃。
+      const reason = (ps.error && ps.error.message)
+        || (ps.stderr || '').toString().trim()
+        || (r.error && r.error.message)
+        || (r.stderr || '').toString().trim()
+        || '系统未提供可用的解压工具（unzip 与系统解压均不可用）';
+      throw new Error(
+        '解压失败：' + reason.slice(0, 300) +
+        '\n解决：① 手动把 zip 解压到任意目录，改用 --from-dir "<解压后的目录>"；' +
+        '\n     ② 或让用户直接提供已解压的文件夹。'
+      );
     }
-  } else {
-    console.log('包内已含 node_modules ✅');
   }
-  // 编译（如需要）
-  buildIfNeeded(installDir, path.join(installDir, mainRel), a);
-  // 应用 curated 补丁（postBuild：作用于 build 产物，如有需要）
-  lib.applyPatches(installDir, pkgName, 'postBuild');
-  return { installDir, mainRel, pkgName };
 }
+
+// 本地包的语言识别、依赖安装、入口定位、command 生成已全部移至 lang.js
+// （resolveLocalPackage 内部按 Node / Python / Go / Rust / Java 等分发），此处不再保留 Node 专属实现。
 
 // 自检：启动 MCP，发 initialize，检查服务器返回的 capabilities（捕获非标准 experimental 广播）
-function selfCheck(mainAbs, timeoutMs = 30000) {
+// spawnCmd 为 [命令, ...参数]，由各语言 handler 提供（Node=node+入口，Python=venv python+入口 或 uv run）
+// selfCheck 必须带上该条目真实的环境变量（如 PYTHONIOENCODING=utf-8），
+// 否则自检跑的环境和宿主实际跑的环境不一致，会给出假阴性/假阳性。
+function selfCheck(spawnCmd, timeoutMs = 30000, extraEnv = {}) {
   return new Promise((resolve) => {
     let child;
-    try { child = spawn(process.execPath, [mainAbs], { env: { ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] }); }
+    try { child = spawn(spawnCmd[0], spawnCmd.slice(1), { env: { ...process.env, ...extraEnv }, stdio: ['pipe', 'pipe', 'pipe'] }); }
     catch (e) { return resolve({ ok: false, error: e.message }); }
     let buf = '', done = false;
-    const timer = setTimeout(() => { if (done) return; done = true; try { child.kill(); } catch {} resolve({ ok: false, error: 'timeout' }); }, timeoutMs);
+    let errBuf = '';
+    child.stderr.on('data', d => { errBuf += d.toString(); });
+    const timer = setTimeout(() => {
+      if (done) return; done = true; try { child.kill(); } catch { }
+      const enc = /UnicodeEncodeError/i.test(errBuf);
+      resolve({ ok: false, error: enc ? 'UnicodeEncodeError（GBK 无法打印该服务端的 emoji/中文，需加 env PYTHONIOENCODING=utf-8）' : 'timeout' });
+    }, timeoutMs);
     child.stdout.on('data', d => {
       if (done) return; buf += d.toString();
       let idx;
@@ -275,17 +258,33 @@ function doHardenAndRebuild(installDir) {
   }
 }
 
-async function selfCheckAndHeal(installDir, mainRel, name, a) {
+async function selfCheckAndHeal(meta, name, a) {
   console.log(`\n🔍 自检 ${name}：握手并检查服务器返回的 capabilities...`);
-  const r = await selfCheck(path.join(installDir, mainRel));
-  if (!r.ok) { console.warn(`⚠️ 自检握手失败：${r.error}（不影响写入，但请手动验证）`); return; }
+  const r = await selfCheck(meta.verifyCmd, 30000, meta.env || {});
+  if (!r.ok) {
+    console.warn(`⚠️ 自检握手失败：${r.error}（配置已写入，但该 MCP 可能起不来）`);
+    console.warn('   如需撤销本次写入：把同目录下的「配置文件名.bak」覆盖回原配置即可。');
+    return;
+  }
   const exp = r.capabilities && r.capabilities.experimental;
   if (exp && Object.keys(exp).length) {
     console.warn(`⚠️ 服务器在 initialize 返回了非标准 capabilities.experimental: ${JSON.stringify(exp)}`);
     console.warn('   严格宿主（如 WorkBuddy）可能拒绝并报 Invalid input。');
     if (a.harden) {
-      console.log('🔧 --harden：自动剥离服务器广播的 experimental 能力并重新编译...');
-      doHardenAndRebuild(installDir);
+      console.log('🔧 --harden：自动剥离服务器广播的 experimental 能力...');
+      if (meta.lang === 'python') {
+        const n = lib.hardenCapabilities(meta.installDir);
+        console.log(n ? `🔧 已剥离 ${n} 个 .py 文件中的 experimental 广播（Python，无需重新编译）` : '（未找到可剥离的 experimental 广播）');
+      } else if (meta.lang === 'binary' || !meta.installDir) {
+        console.warn('⚠️ 这是已编译好的可执行程序，无法就地剥离 experimental 广播。');
+        console.warn('   处理办法：① 找作者更新的版本；② 或改用云端版；③ 若宿主拒绝连接，请联系作者反馈。');
+        return;
+      } else {
+        doHardenAndRebuild(meta.installDir);
+      }
+      const r2 = await selfCheck(meta.verifyCmd, 30000, meta.env || {});
+      if (r2.capabilities && r2.capabilities.experimental && Object.keys(r2.capabilities.experimental).length) console.warn('⚠️ 剥离后仍有 experimental，请手动排查');
+      else console.log('✅ 剥离后自检通过');
     } else {
       console.log('   如需自动剥离，重跑时加 --harden（curated 补丁已处理已知包；未知包建议 --harden）。');
     }
@@ -311,7 +310,9 @@ async function main() {
       let ent = { type: 'streamableHttp', url: a['from-url'], disabled: false };
       if (hasPlaceholder(ent) && !apiKey) throw new Error('URL 含密钥占位符，请用 --api-key 提供真实 key');
       ent = subDeep(ent, apiKey);
-      if (Object.keys(env).length) ent.env = env;
+      // 合并而不是覆盖：lang.js 为 Python 条目预置了 UTF-8 env 兜底，
+      // 用户传 --env 时不能把它冲掉，否则中文 Windows 上会崩在握手前。
+      if (Object.keys(env).length) ent.env = { ...(ent.env || {}), ...env };
       entries[a.name] = ent;
 
     } else if (a['from-json']) {
@@ -337,32 +338,32 @@ async function main() {
       }
 
     } else if (a['from-dir']) {
-      if (!a.name) throw new Error('--from-dir 需要 --name');
-      const root = findPackageRoot(a['from-dir']);
-      if (!root) throw new Error('在 ' + a['from-dir'] + ' 找不到 package.json，不像可运行的 MCP 包');
-      const { installDir, mainRel } = installLocalPackage(root, a.name, a, dryRun);
-      let ent = { type: 'stdio', command: nodeCmd, args: [path.join(installDir, mainRel)], disabled: false };
-      if (Object.keys(env).length) ent.env = env;
-      entries[a.name] = ent;
-      if (!dryRun) localMeta[a.name] = { installDir, mainRel };
+      const nm = a.name || inferName(a['from-dir']);
+      const res = lang.resolveLocalPackage(a['from-dir'], nm, a, dryRun);
+      let ent = res.entry;
+      // 合并而不是覆盖：lang.js 为 Python 条目预置了 UTF-8 env 兜底，
+      // 用户传 --env 时不能把它冲掉，否则中文 Windows 上会崩在握手前。
+      if (Object.keys(env).length) ent.env = { ...(ent.env || {}), ...env };
+      entries[nm] = ent;
+      if (!dryRun) localMeta[nm] = { installDir: res.installDir, verifyCmd: res.verifyCmd, mainRel: res.mainRel, lang: res.lang, env: ent.env };
 
     } else if (a['from-zip']) {
-      if (!a.name) throw new Error('--from-zip 需要 --name');
+      const nm = a.name || inferName(a['from-zip']);
+      const tmp = path.join(os.tmpdir(), 'mcp-zip-' + Date.now());
       if (dryRun) {
-        console.log('[dry-run] 将解压', a['from-zip'], '到临时目录后再按目录处理（dry-run 不解压）');
-        const installDir = a['install-dir'] || defaultInstallDir(a.name);
-        entries[a.name] = { type: 'stdio', command: nodeCmd, args: [path.join(installDir, '<解压后按 package.json main 解析>')], disabled: false };
+        console.log('[dry-run] 将解压', a['from-zip'], '到临时目录后再按语言处理（dry-run 不解压）');
+        const installDir = a['install-dir'] || defaultInstallDir(nm);
+        entries[nm] = { type: 'stdio', command: '<按语言生成>', args: ['<入口>'], disabled: false };
       } else {
-        const tmp = path.join(os.tmpdir(), 'mcp-zip-' + Date.now());
         extractZip(a['from-zip'], tmp);
-        const root = findPackageRoot(tmp);
-        if (!root) throw new Error('zip 解压后找不到 package.json');
-        const { installDir, mainRel } = installLocalPackage(root, a.name, a, false);
+        const res = lang.resolveLocalPackage(tmp, nm, a, false);
         try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { }
-        let ent = { type: 'stdio', command: nodeCmd, args: [path.join(installDir, mainRel)], disabled: false };
-        if (Object.keys(env).length) ent.env = env;
-        entries[a.name] = ent;
-        localMeta[a.name] = { installDir, mainRel };
+        let ent = res.entry;
+        // 合并而不是覆盖：lang.js 为 Python 条目预置了 UTF-8 env 兜底，
+      // 用户传 --env 时不能把它冲掉，否则中文 Windows 上会崩在握手前。
+      if (Object.keys(env).length) ent.env = { ...(ent.env || {}), ...env };
+        entries[nm] = ent;
+        localMeta[nm] = { installDir: res.installDir, verifyCmd: res.verifyCmd, mainRel: res.mainRel, lang: res.lang, env: ent.env };
       }
 
     } else if (a['from-template']) {
@@ -376,7 +377,9 @@ async function main() {
         console.log('已生成骨架:', path.join(installDir, 'index.js'));
       }
       let ent = { type: 'stdio', command: nodeCmd, args: [path.join(installDir, 'index.js')], disabled: false };
-      if (Object.keys(env).length) ent.env = env;
+      // 合并而不是覆盖：lang.js 为 Python 条目预置了 UTF-8 env 兜底，
+      // 用户传 --env 时不能把它冲掉，否则中文 Windows 上会崩在握手前。
+      if (Object.keys(env).length) ent.env = { ...(ent.env || {}), ...env };
       entries[a.name] = ent;
 
     } else if (a.index) {
@@ -387,50 +390,95 @@ async function main() {
       for (let i = 0; i < 3 && d; i++) { if (fs.existsSync(path.join(d, 'node_modules'))) { foundNM = true; break; } const up = path.dirname(d); if (up === d) break; d = up; }
       if (!foundNM) console.warn('⚠️ index.js 附近无 node_modules；若它 import 了外部包，运行会失败（建议提供整个包用 --from-dir）');
       let ent = { type: 'stdio', command: nodeCmd, args: [abs], disabled: false };
-      if (Object.keys(env).length) ent.env = env;
+      // 合并而不是覆盖：lang.js 为 Python 条目预置了 UTF-8 env 兜底，
+      // 用户传 --env 时不能把它冲掉，否则中文 Windows 上会崩在握手前。
+      if (Object.keys(env).length) ent.env = { ...(ent.env || {}), ...env };
       entries[a.name] = ent;
+
+    } else if (a.bin) {
+      // 直接注册现成可执行程序：Go/Rust/Java 等作者发布的二进制，免装工具链、免复制源码。
+      const babs = path.resolve(a.bin);
+      if (!fs.existsSync(babs)) throw new Error('--bin 指定的文件不存在: ' + babs);
+      const nm = a.name || path.basename(babs).replace(/\.(exe|bat|cmd|jar|dll)$/i, '');
+      const bargs = a['bin-args'] ? String(a['bin-args']).split(/\s+/).filter(Boolean) : [];
+      let ent = { type: 'stdio', command: babs, args: bargs, disabled: false };
+      // 合并而不是覆盖：lang.js 为 Python 条目预置了 UTF-8 env 兜底，
+      // 用户传 --env 时不能把它冲掉，否则中文 Windows 上会崩在握手前。
+      if (Object.keys(env).length) ent.env = { ...(ent.env || {}), ...env };
+      entries[nm] = ent;
+      console.log('使用现成可执行程序:', babs);
+      // 让 --self-check 也能验证它（下载来的程序是否真会说 MCP 协议，必须验）
+      if (!dryRun) localMeta[nm] = { verifyCmd: [babs].concat(bargs), mainRel: path.basename(babs), lang: 'binary', env: ent.env };
 
     } else if (a.pkg) {
       if (!a.name) throw new Error('--pkg 需要 --name');
       let ent = { type: 'stdio', command: 'npx', args: ['-y', a.pkg], disabled: false };
-      if (Object.keys(env).length) ent.env = env;
+      // 合并而不是覆盖：lang.js 为 Python 条目预置了 UTF-8 env 兜底，
+      // 用户传 --env 时不能把它冲掉，否则中文 Windows 上会崩在握手前。
+      if (Object.keys(env).length) ent.env = { ...(ent.env || {}), ...env };
+      entries[a.name] = ent;
+
+    } else if (a['uvx-pkg']) {
+      if (!a.name) throw new Error('--uvx-pkg 需要 --name');
+      const args = a['uvx-with'] ? ['--with', a['uvx-with'], a['uvx-pkg']] : [a['uvx-pkg']];
+      let ent = { type: 'stdio', command: 'uvx', args, disabled: false };
+      // 合并而不是覆盖：lang.js 为 Python 条目预置了 UTF-8 env 兜底，
+      // 用户传 --env 时不能把它冲掉，否则中文 Windows 上会崩在握手前。
+      if (Object.keys(env).length) ent.env = { ...(ent.env || {}), ...env };
       entries[a.name] = ent;
 
     } else {
       usage(); process.exit(1);
     }
   } catch (e) {
-    console.error('❌ ' + e.message);
+    // 注意：这里必须自己落盘，否则 process.exit 会绕过外层 main().catch 的统一错误处理
+    const msg = e && e.message ? e.message : String(e);
+    logInstall({ ok: false, stage: 'build-entry', error: msg.slice(0, 500) });
+    console.error('❌ ' + msg);
     process.exit(1);
   }
 
   if (!Object.keys(entries).length) { console.error('没有可写入的条目'); process.exit(1); }
 
-  // 平台识别 + node 预检（仅本地 stdio 条目需要 node；云端条目不需要）
+  // 平台识别 + 运行时预检（仅本地 stdio 条目；云端条目不需要）
   const hasLocal = Object.values(entries).some(e => e.type === 'stdio');
   if (hasLocal) {
     const platform = detectTargetPlatform();
     console.log(`🌐 目标平台识别: ${platform}`);
-    if (a.node) {
-      console.log(`🟡 使用用户指定的 node: ${a.node}（非默认可移植形态；分享前请确认目标机该路径有效）`);
-    } else {
-      const nodeCheck = preflightNodeCheck();
-      if (nodeCheck.ok) {
-        console.log(`🟢 node 可达 (${nodeCheck.version})；使用可移植的裸 "node" 作为 command（跨平台/跨用户分享最稳）`);
+    const needsNode = Object.values(entries).some(e => e.type === 'stdio' && (e.command === 'node' || e.command === 'npx'));
+    const hasPython = Object.values(entries).some(e => e.type === 'stdio' && (String(e.command).includes('.venv') || e.command === 'uv' || e.command === 'uvx'));
+    if (needsNode) {
+      if (a.node) {
+        console.log(`🟡 使用用户指定的 node: ${a.node}（非默认可移植形态；分享前请确认目标机该路径有效）`);
       } else {
-        console.warn(`⚠️ 当前环境 PATH 未检测到 node：${nodeCheck.error}`);
-        if (nodeCheck.candidates.length) {
-          console.warn('   发现可参考的 node 位置（未自动改用，保持裸 "node" 以保可移植）：');
-          nodeCheck.candidates.slice(0, 5).forEach(p => console.warn('   - ' + p));
+        const nodeCheck = preflightNodeCheck();
+        if (nodeCheck.ok) {
+          console.log(`🟢 node 可达 (${nodeCheck.version})；使用可移植的裸 "node" 作为 command（跨平台/跨用户分享最稳）`);
+        } else {
+          console.warn(`⚠️ 当前环境 PATH 未检测到 node：${nodeCheck.error}`);
+          if (nodeCheck.candidates.length) {
+            console.warn('   发现可参考的 node 位置（未自动改用，保持裸 "node" 以保可移植）：');
+            nodeCheck.candidates.slice(0, 5).forEach(p => console.warn('   - ' + p));
+          }
+          console.warn('   若目标宿主 spawn MCP 时 PATH 无 node，请确认目标平台已提供 node（主流 AI 平台均自带/要求 node）。');
         }
-        console.warn('   若目标宿主 spawn MCP 时 PATH 无 node，请确认目标平台已提供 node（主流 AI 平台均自带/要求 node）。');
       }
+    } else if (hasPython) {
+      console.log('🐍 含 Python/uv 类型条目：默认使用 venv 绝对路径（或 uvx），运行时不依赖 PATH 中的 node，无需 node 预检。');
     }
   }
 
   const data = readMcpJson(mcpPath);
   for (const [nm, ent] of Object.entries(entries)) {
-    if (data.mcpServers[nm]) console.warn(`⚠️ 已存在 "${nm}"，将覆盖`);
+    const prev = data.mcpServers[nm];
+    if (prev) {
+      console.warn(`⚠️ 已存在 "${nm}"，将覆盖（原配置会先备份为 ${path.basename(mcpPath)}.bak）`);
+      // 保留用户既有的 env 凭据：重配同一个 MCP 时不应把已填好的 token/key 抹掉。
+      if (prev.env && typeof prev.env === 'object' && !Array.isArray(prev.env)) {
+        ent.env = { ...prev.env, ...(ent.env || {}) };
+        console.log(`   已保留原条目的环境变量: ${Object.keys(prev.env).join(', ')}`);
+      }
+    }
     data.mcpServers[nm] = ent;
   }
   if (dryRun) {
@@ -439,14 +487,22 @@ async function main() {
   }
   writeMcpJson(mcpPath, data);
   console.log('✅ 已写入', mcpPath);
-  for (const [nm, ent] of Object.entries(entries)) console.log('条目:', nm, JSON.stringify(ent));
+  for (const [nm, ent] of Object.entries(entries)) {
+    console.log('条目:', nm, JSON.stringify(ent));
+    logInstall({ server: nm, ok: true, type: ent.type, command: ent.command, lang: (localMeta[nm] && localMeta[nm].lang) || null, config: mcpPath });
+  }
   console.log('⚠️ 新 MCP 不会自动生效：请在连接器管理页右上角「自定义连接器」入口点「信任」启用。');
 
   // 自检 + 自愈（仅本地 stdio 包；--self-check 开启）
   if (a['self-check']) {
     for (const [nm, meta] of Object.entries(localMeta)) {
-      await selfCheckAndHeal(meta.installDir, meta.mainRel, nm, a);
+      await selfCheckAndHeal(meta, nm, a);
     }
   }
 }
-main().catch(e => { console.error('❌ ' + (e && e.message ? e.message : e)); process.exit(1); });
+main().catch(e => {
+  const msg = e && e.message ? e.message : String(e);
+  logInstall({ ok: false, error: msg.slice(0, 500) }); // 失败也落盘，便于事后排查
+  console.error('❌ ' + msg);
+  process.exit(1);
+});

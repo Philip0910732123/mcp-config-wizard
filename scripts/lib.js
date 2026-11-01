@@ -54,9 +54,9 @@ function removeObjectProperty(filePath, key) {
   return true;
 }
 
-// 通用硬化：剥离服务器广播的非标准 experimental 能力（遍历 src/build 下所有 .ts/.js）
+// 通用硬化：剥离服务器广播的非标准 experimental 能力（遍历 src/build 下所有 .ts/.js/.py）
 function hardenCapabilities(installDir) {
-  const files = findFiles(installDir, f => /\.(ts|js)$/.test(f) && !f.split(/[\\/]/).includes('node_modules'));
+  const files = findFiles(installDir, f => /\.(ts|js|py)$/.test(f) && !f.split(/[\\/]/).includes('node_modules') && !f.split(/[\\/]/).includes('.venv'));
   let changed = 0;
   for (const f of files) {
     if (removeObjectProperty(f, 'experimental')) changed++;

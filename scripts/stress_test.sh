@@ -95,7 +95,7 @@ main() {
   run_test "T7 安装目录已存在且无 --overwrite" "ERR:安装目录已存在" "" node "$SC" --from-dir "$ROOT/fixture_nodeps" --name t7 --install-dir "$ROOT/existing_dir" --mcp-json "$MJ"
   run_test "T8 --index 邻近无 node_modules 告警" "OK" "附近无 node_modules" node "$SC" --index "$ROOT/lonely_index.js" --name t8 --dry-run --mcp-json "$MJ"
   run_test "T9 --pkg npx 远程包" "OK" "npx" node "$SC" --pkg @some/scope-pkg --name t9 --dry-run --mcp-json "$MJ"
-  run_test "T10 from-dir 指向文件（非目录）" "ERR:找不到 package.json" "" node "$SC" --from-dir "$ROOT/fixture_nodeps/package.json" --name t10 --dry-run --mcp-json "$MJ"
+  run_test "T10 from-dir 指向文件（非目录）" "ERR:找不到任何可识别的 MCP 包标记" "" node "$SC" --from-dir "$ROOT/fixture_nodeps/package.json" --name t10 --dry-run --mcp-json "$MJ"
 
   echo "verify_mcp.js 压测："
   run_test "V1a mcp.json 路径不存在" "ERR:mcp.json 不存在" "" node "$VR" --name mock --mcp-json "$ROOT/nope.json"

@@ -12,6 +12,96 @@
 
 ---
 
+## [1.3.1] — 2026-11-01
+
+**去掉"缺 uv 就报错"的门槛：向导自动补装 uv；并更正 1.3.0 的一处归因错误**
+
+- **`lang.js` 新增 `ensureUv()` 自动补装**：原先检测不到 `uv` 就直接抛错停下，让用户自己去装（对一个"配置 MCP"的助手来说，这一步足以劝退非 IT 背景的研发同事）。现在改为分三段走：
+  1. `tryUvBin()` 依次试 `uv`（PATH）、`~/.local/bin`、`~/.cargo/bin`、`%APPDATA%\Python\Python3xx\Scripts`；
+  2. 都没有 → `findPythonForPip()` 优先用 **WorkBuddy 自带的 `binaries/python/envs/default`**（一定存在，不依赖用户自己装过 Python），执行 `pip install --user uv`，失败再试直装；
+  3. 装完重新定位并缓存到 `UV_BIN`，后续 `uv sync` 与 `--uv` 模式统一复用该绝对路径。
+  最终仍失败才抛错，且文案给三条出路（安装包 / `pip install uv` / `winget`）+ 明确"这一步只需做一次"。
+- **`handlePython` 改用 `UV_BIN`**：`uv sync` 与 `--uv` 模式不再写死字符串 `'uv'`，避免"uv 装在非 PATH 目录时找不到"。
+- **SKILL.md 三处表述同步更新**：暂停规则、失败处理、语言速查表里"需本机装 uv"统一改为"缺失时向导自动补装，用户无需手动操作"。
+- **更正 1.3.0 的一处归因错误**（见下条注记）：这不是功能改动，但它会导致误判，必须留档纠正。
+- **实测**：`findPythonForPip` → 命中 WorkBuddy 自带 python 3.13；`findUvCandidate` → 命中 PATH 的 `uv`；`handlePython` 默认模式与 `--uv` 模式均正常生成条目并带 env；`--from-zip` 全流程（解压 → uv sync → 定位 venv → 生成条目 → 自检）真实跑通。
+
+> **对 1.3.0 的更正**：1.3.0 里写的"在 Git Bash 里手工跑同一份代码一直是成功的（终端是 UTF-8）"**不准确**。2026-11-01 二次实测：本机 Git Bash 中该 Python 的 `sys.stdout.encoding` 默认就是 `gbk`（系统 code page 936），不设任何 `PYTHON*` 变量跑旧版 gdc 源码，同样抛 `UnicodeEncodeError`。能否复现取决于终端与 Python codepage 的组合，**不能靠"我这儿能跑"下结论**。同时确认更本质的判据：`sys.stdout.errors = strict`（无法编码即崩）、`sys.stderr.errors = backslashreplace`（转义成 `\uXXXX` 照常输出）——**只有 stdout 会崩，stderr 不会**，所以 `print(..., file=sys.stderr)` 和默认走 stderr 的 `logging` 都安全。
+
+## [1.3.0] — 2026-11-01
+
+**Python 类 MCP 在中文 Windows 上的"必崩陷阱"：默认注入 UTF-8 兜底 + GBK 模拟冒烟测试**
+
+背景（真实故障，非假设）：某个 Python 写的 MCP（`nci-gdc-mcp-server`）在 WorkBuddy 里反复报 `-32000: Connection closed`，同一批 20+ 个 MCP 全部正常。根因是服务端源码第 123 行往 stdout 打印了一段带 emoji 的启动横幅，而宿主拉起子进程时 Python 的 stdout 编码是 **GBK(cp936)**，`UnicodeEncodeError: 'gbk' codec can't encode character '\U0001f50d'` → 进程在 `initialize` 之前 exit(1)。最坑的是：在 Git Bash 里手工跑同一份代码**一直是成功的**（终端是 UTF-8），所以极易误判成"配置没问题"。
+
+- **`lang.js` 新增 `PY_ENV`，所有 Python 条目默认注入** `PYTHONIOENCODING=utf-8` + `PYTHONUTF8=1`（venv 绝对路径与 `uv run` 两种模式都覆盖）。这是对**任何**会输出非 GBK 字符的 Python MCP 都成立的通用兜底。
+- **`scaffold_mcp.js` 改 `--env` 为合并**：原先是 `ent.env = env` 直接覆盖，用户一旦传 `--env`（例如带 API key）就会把编码兜底冲掉。现改为 `{ ...ent.env, ...env }`，8 处入口统一。
+- **`selfCheck` 带上条目真实 env**：原先只用 `process.env`，自检环境与宿主实际环境不一致，会给出假阴性/假阳性。现签名扩展为 `selfCheck(cmd, timeout, extraEnv)`，并在超时时识别 `UnicodeEncodeError` 给出人话解释。
+- **`verify_mcp.js` 新增两项检查**：
+  - **GBK 编码探测**（Python 条目自动触发）：握手成功后再用强制 GBK 环境握一次手。通过 = 源码本身安全；失败 = 依赖 env 兜底，并提示"别人照抄源码漏配 env 就会复现"。`--no-gbk` 可跳过。
+  - **stdout 污染检测**：收集 stdout 里非 JSON-RPC 的行，协议流被横幅污染时单独告警。
+- **失败报错重写**：握手期崩溃若命中 `UnicodeEncodeError`，直接给出根因 + 两条修法（加 env / 改源码输出到 stderr）+ 那句最关键的提醒「终端里手跑通常不报错，不代表宿主里没问题」。
+- **SKILL.md**：握手验证节新增「Python 类：编码探测」小节；排错速查表新增 `-32000: Connection closed` 专项行。全文仍控制在 500 行内。
+- **实测覆盖**（4 组，全部真实跑通）：①已修源码 + 强制 GBK → PASS 16 工具；②未修源码 + 强制 GBK → 精确检出 `UnicodeEncodeError`；③未修源码 + 无 env + GBK 宿主 → 走专项报错文案；④`handlePython` 两种模式返回条目均含 env。
+
+## [1.2.2] — 2026-11-01
+
+**编译型语言（Go/Rust/Java/.NET）不再"劝退"——改为给出口而不是给命令**
+
+背景：识别能力保留（不改动任何检测逻辑），但原先把"本机未安装 Go"直接抛给用户、让用户装完重跑，对非 IT 的研发同事等于当场宣告失败，且会让他认为 skill 不好用。
+
+- **重写缺工具链的提示文案**：第一句先交代"不是你的操作问题、其它 MCP 不受影响、mcp.json 未被改动"，再给**三条按成功率排序的出路**。其中第 1 条（用作者发布的现成可执行文件）**完全不需要装任何环境**；第 3 条才是装工具链，并明确标注"需 IT/开发同学出手"。
+- **新增 `--bin` / `--bin-args` 参数**：可直接注册作者发布的现成可执行程序（`.exe`/`.jar` 等），不复制源码、不装工具链。这是"AI 去 GitHub Releases 下载 → `--bin` 注册"这条免环境路径的落地实现。已用真实 MCP 程序实测：注册 + `--self-check` 握手通过。
+- **失败自动回滚复制**：编译型语言在复制后失败时，自动删除本次复制的安装目录。此前失败会留下半装目录，用户按提示装好工具链重跑时会撞上"安装目录已存在"，造成二次劝退。实测确认目录与 `mcp.json` 均无残留。
+- **`--harden` 对二进制如实说明**：编译好的可执行文件无法就地剥离 `experimental` 广播，改为明确提示"找作者新版本 / 换云端版 / 联系作者"，不再假装能自动修。
+- **SKILL.md**：新增小节「编译型语言缺工具链时——禁止劝退式回复」（三条出路表 + 文案铁律）；参数纠正表新增 3 行（禁止直接叫用户装 Go、已有 .exe 不必再走 `--from-dir`、`--bin` 必配 `--self-check`）。
+
+## [1.2.1] — 2026-11-01
+
+**稳定性加固（基于一次完整审计，全部经实测复现 + 回归验证）**
+
+- **写入安全（P0）**：`writeMcpJson` 改为「序列化自校验 → 备份 `<配置文件名>.bak` → 临时文件 + 原子改名替换」。此前是直接 `writeFileSync` 整份覆盖，若写入中途断电/被杀/磁盘满，会留下半截 JSON 导致**全部 MCP 配置不可用**且无备份。
+- **同名重配不再丢凭据（P1）**：覆盖已存在的同名 server 时，**保留原条目 `env`**（token/key 不再被抹掉），并明确提示会备份。此前实测 `env.MY_TOKEN` 会被静默清除。
+- **解压失败给出可读原因（P1）**：`extractZip` 在 `unzip` 与系统解压都不可用时，原先抛 `❌ 解压失败: `（错误信息为空、用户无从下手）；现输出真实原因（如 `spawnSync powershell ENOENT`）+ 两条解决建议（手动解压改 `--from-dir`）。
+- **自检失败给出回滚路径（P2）**：握手失败时提示可用 `.bak` 撤销本次写入。
+- **SKILL.md 补「参数纠正表」**：覆盖 7 类常见命令参数误用（如对 Python 包传 `--npm-install`、`--from-dir` 指向 zip、猜 `npx` 包名），减少 AI 误用导致的配置失败。
+- **SKILL.md 铁律新增第 6 条**：写明写入即备份 / 原子替换 / 保留 env 的保证。
+- **新增「暂停规则」（硬门禁，5 种必须停下）**：缺凭据 / 包标记无法识别 / 缺运行时 / 自检握手失败 / 包与需求不匹配 —— 命中即停并用人话说明，明确禁止"先配了再说"、猜占位符、擅自降级方案。
+- **新增执行台账（落盘）**：每次配置成功或失败都追加一行到 `~/.workbuddy/mcp-servers/.install-log.jsonl`（时间/服务名/语言/command/失败原因），批量配多个 MCP 时用它核对进度、中断后不必凭记忆重跑。
+- **修复内层 catch 绕过统一错误处理**：入口构建段的 `try/catch` 原先直接 `process.exit(1)`，绕过外层 `main().catch`，导致最常见的失败（包不对 / 缺运行时 / 参数错）既不落盘也无统一处理。现已补齐落盘。
+- **新增 `skill.manifest.json`**：声明运行时（Node ≥18、零第三方依赖）与产出路径，便于技能中心与审计工具识别。
+- 注：`skill-auditor` 的 prescreen 把 `has_scripts` 判为 false 是因其只统计 `scripts/*.py`，与本 skill 全 JS 实现无关；补 manifest 不改变该判定，此处如实记录以免误判为缺陷。
+- 审计工具复核：prescreen v3.5.0 自动 fail 由 4 项降为 **0 项**（自动 pass 2 → 6）；SKILL.md **338 行**（< 500 上限）。
+- 回归实测通过：含空格路径 zip、`unzip` 失败回退系统解压、无任何解压工具时的报错、非法 JSON 的 fail-closed（原文件不被改、不产生 `.bak`/`.tmp` 残留）、同名覆盖保留 env 且备份内容正确。
+- 对应 GitHub tag：`v1.2.1`
+- 对应技能中心版本：`1.2.1`
+
+---
+
+## [1.2.0] — 2026-11-01
+
+- **极简模式（面向非技术用户一句话配置）**：新增 5.0 节，明确当用户用大白话提出「配置 XX mcp，zip 在 YY」／「配置 XX mcp，这是源码包（附附件）」等请求时，AI 直接全自动执行——不反问命令行参数、不要求用户背命令。Python 与 Node 走同一条 `--from-zip` / `--from-dir` 命令，语言由脚本自动识别。
+- **`--name` 可省略（自动推断）**：`--from-dir` / `--from-zip` 不再强制要求 `--name`；未提供时从目录名 / zip 文件名自动推断服务名（如 `gdc-mcp-server-source.zip` → `gdc-mcp-server`），进一步降低对非 IT 用户的门槛。
+- 实测：仅用 `--from-zip "<zip>" --self-check`（无 `--name`）即可完成「识别 Python → uv sync 装依赖 → 生成 venv 绝对路径条目 → 握手自检通过」的完整链路。
+- 对应 GitHub tag：`v1.2.0`
+- 对应技能中心版本：`1.2.0`
+
+---
+
+## [1.1.0] — 2026-11-01
+
+- **运行时类型自动识别（多语言一致体验）**：本地包（文件夹/zip）现在按"标记文件"自动识别语言，无需用户判断 Node / Python / Go / Rust / Java / .NET / Ruby / PHP / Docker。
+- **Python 本地包完整自动化**（原 1.0.0 仅描述、未实装，本次补齐）：`--from-dir` / `--from-zip` 对 Python 包自动 `uv sync` 装依赖到 `.venv`、识别入口（`pyproject.toml` 的 `[project.scripts]` / `py-modules` / 常见 `server.py` 等，或 `--entry` 手动指定）、生成配置并握手验证。
+  - 默认生成 **venv 绝对路径** command（运行时不再依赖 PATH 中有 uv，消除 `Connection closed` 类启动崩溃）；支持 `--uv` 改用可移植的 `uv --directory run`。
+  - 新增 `--uvx-pkg`：Python 包已发布到 PyPI/uv 源时，直接 `uvx` 拉取（无本地路径，等同 npx）；可配 `--uvx-with`。
+- **verify_mcp.js 兼容 Python 条目**：直接 spawn venv python 做握手，并对 `--harden` 区分 Node / Python（Python 剥离 `.py` 里的 experimental 广播，无需重编译）。
+- **预案**：Go / Rust 识别后若包含预编译二进制直接采用；Java / .NET 识别后在装有工具链时自动编译，缺工具链给出清晰安装指引。Docker 类型识别后提示走 HTTP 端点（后续可加 `--from-docker`）。
+- **架构**：抽离 `scripts/lang.js`（detectLang / resolveLocalPackage / 各语言 handler），新增语言只需在其 `handleLang` 加一个分支，无需改动 `scaffold_mcp.js`。
+- 对应 GitHub tag：`v1.1.0`
+- 对应技能中心版本：`1.1.0`
+
+---
+
 ## [1.0.0] — 2026-10-31
 
 - 首个公开发布版本。

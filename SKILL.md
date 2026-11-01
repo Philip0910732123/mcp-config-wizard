@@ -1,6 +1,11 @@
 ---
 name: mcp-config-wizard
 description: 面向生物医药研发场景，把"选什么/审什么"（决策）与"怎么装进 WorkBuddy"（执行）合二为一。覆盖：按需选型清单（商业 SaaS 情报类 + 化学/靶点/临床/结构等科学数据 MCP，几十个也能管）、安装前安全审查、配置进 WorkBuddy（云端 streamableHttp / 本地 stdio 自动脚手架+握手验证）、多 MCP 治理与排错。触发词：配置 MCP、加一个 MCP 服务、MCP 选型、MCP 安全吗、MCP 配不上、MCP 太多怎么管、配置 PDB/ChEMBL/智慧芽、给 AI 接数据源/API。不适用于：MCP 服务端源码开发/从零编写（本 skill 只做接入与治理，不写服务本身）、非 WorkBuddy 平台的 MCP 配置（路径与入口不同）、纯理论科普而不落地配置。
+slug: mcp-config-wizard
+displayName: MCP 选型与配置向导
+version: 1.3.1
+summary: 生物医药研发场景的 MCP 选型、安全审查与一键配置向导，覆盖 stdio / streamableHttp / SSE 三类接入与多 MCP 治理排错。
+license: MIT
 ---
 
 # MCP 选型与配置向导
@@ -74,15 +79,49 @@ description: 面向生物医药研发场景，把"选什么/审什么"（决策�
 
 > 全程不要手写 mcp.json，用本 skill 的脚本（`scripts/scaffold_mcp.js` / `scripts/verify_mcp.js`）。核心只让用户提供：**配置来源（JSON/URL 或本地文件）** 与 **凭据（API key / 用户名密码）**。
 
-### 铁律（先读，违反即失败）
+### 铁律（强制执行层：先读，违反即失败）
 1. **绝不上网搜索 / 下载 MCP 源码**。源码只能来自：用户给的 JSON、用户给的 URL、用户给的本地文件 / 文件夹 / zip。找不到就让用户提供。
-2. **单份 `index.js` 几乎都不够**。它通常 `import` 外部包（如 `@modelcontextprotocol/sdk`、`axios`），必须有 `node_modules`。所以本地型要让用户提供"整个包"，或允许 `npm install`。
+2. **单份 `index.js` 几乎都不够**（Node 同理：单份 `.py` 也不够）。Node 的 `.js` 通常 `import` 外部包（如 `@modelcontextprotocol/sdk`、`axios`），必须有 `node_modules`；Python 的 `.py` 需要 `uv sync` 生成的 `.venv` 依赖。所以本地型要让用户提供"整个包"，或允许 `npm install` / `uv sync`——**这些向导都会自动处理**。
 3. 本地包**统一放到 `~/.workbuddy/mcp-servers/<服务名>/`**（脚本自动复制；也可让用户自己放）。
 4. WorkBuddy 的 mcp.json 每条**必须带 `type`**：本地 `stdio`，远程 `streamableHttp`。脚本已自动处理。
 5. 第三方真实服务**禁止用 `--from-template`**（那只是「hello」占位骨架，握手能过但根本不是真服务）。
+6. **写入即备份**：脚本在改写 `mcp.json` 前会自动存一份同名 `.bak`，并用「临时文件 + 原子改名」替换，避免半截写入毁掉全部 MCP 配置。重配同名服务时，**原条目的 `env` 凭据会被保留**（不会被新条目抹掉）。
 
-### 第 0 步：先问答（不得跳过）
-问用户一句：**「你手上有这个 MCP 的配置吗？是①一段 JSON / 一个 URL，还是②本地文件（index.js）/ 文件夹 / zip？」**
+### 暂停规则（必须暂停的 5 种情况）
+
+以下是**必须暂停**的硬门禁：命中任一条就停下手，用人话把情况告诉用户，**不得"先配了再说"、不得猜、不得擅自降级方案**。
+
+| 情况 | 停下来做什么 |
+|---|---|
+| 需要凭据（key / 账号）但用户没给 | 直接问用户要真实值。**绝不编造、绝不先用占位符写进去** |
+| 包里找不到任何可识别标记（`package.json` / `pyproject.toml` / `go.mod` / `Cargo.toml` …） | 告诉用户"这不像完整源码包"，请其确认或补发完整包；**不要试图自己拼一个** |
+| 本机缺运行时（`uv` / `npm` / `go` / `java`） | **`uv` 自动补装**（向导会用本机 python 执行 `pip install uv`，用户无需任何操作）；`npm` / `go` / `java` 给安装指引后停。**不要偷偷换成猜的绝对路径**或改别的运行时 |
+| 自检握手失败 | 只能报「已写入但未通过验证」，**不得说"配好了"**；同时给出 `.bak` 回滚路径 |
+| 包与需求不匹配（如要查 TCGA 却给了通用 HTTP 工具） | 先说清不匹配点，让用户决定，不要闷头配完 |
+
+## 5.0 极简模式（非技术用户：一句话就能配，无需懂命令行）
+
+本 skill 支持「用户只说大白话，AI 全自动配好」的体验。**当用户的请求符合下面任一类时，AI 直接执行，不要反问命令行参数、不要列出命令让用户选、不要要求用户背命令**：
+
+- 「配置 GDC mcp，zip 在 `D:\共享\gdc-mcp-server-source.zip`」
+- 「配置 XX mcp，这是源码包（附 zip 附件）」
+- 「帮我加一下这个 MCP，文件夹在 `YY` 路径」
+
+**AI 应执行的固定动作（不变量）**：
+1. 从用户的话里提取服务名（如「GDC」→ `gdc`）；提取 zip / 文件夹路径（若用户上传了附件，取附件的绝对路径）。
+2. 若用户没明说名字，**不要问**——脚本已支持 `--name` 省略，会自动从路径文件名推断（如 `gdc-mcp-server-source.zip` → `gdc-mcp-server`）。
+3. 直接执行（Python / Node 等任意类型都一样，脚本自动识别语言）：
+   - 给的是 zip：  `node scripts/scaffold_mcp.js --from-zip "<zip路径>" --self-check`
+   - 给的是文件夹：`node scripts/scaffold_mcp.js --from-dir "<文件夹路径>" --self-check`
+4. 把结果翻译成大白话回用户：
+   - 成功：「✅ 已帮你把 `<name>` 配好并验证通过（N 个工具可用）。请**重启 WorkBuddy** → 连接器页右上角「自定义连接器」→ 找到 `<name>` → 点「信任」即可使用。」
+   - 失败（如 `uv sync` 网络问题）：把报错翻成人话告诉用户该怎么处理，**不要直接甩 stderr**。缺 `uv` 本身不算失败——向导会自动 `pip install uv` 补装。
+5. 始终保留「重启 + 信任」两步提醒（见交付清单）。
+
+> **核心原则**：用户永远只说「配置 XX，给包 / 给路径」这一句话；其余的「识别语言、装依赖、配本机路径、握手验证」全部由 AI + 脚本完成，这才算「丝滑」。面向药企研发等非 IT 用户时，**默认走极简模式**。
+
+### 第 0 步：判断来源（非必须问答）
+> 若用户在请求里已经给出配置来源（JSON/URL 或 文件/zip/路径），直接进入对应方案即可，**不必反复问答**（也契合 5.0 极简模式）。只有当用户完全没给来源时，才问一句：**「你手上有这个 MCP 的配置吗？是①一段 JSON / 一个 URL，还是②本地文件（index.js）/ 文件夹 / zip？」**
 - 有 JSON 或 URL → 走 **方案一**
 - 有本地文件 / 文件夹 / zip → 走 **方案二**
 - 都没有 → 停下，请用户提供；**不要上网找**。
@@ -93,9 +132,10 @@ description: 面向生物医药研发场景，把"选什么/审什么"（决策�
 用户有配置来源？ ──否──→ 停下，请用户提供；不要上网找
        │是
        ├─ JSON / URL / 裸 URL 字符串 ─────→ 方案一·云端（streamableHttp + key）
-       ├─ 文件夹 / zip（完整包）──────────→ 方案二·本地（--from-dir / --from-zip）
+       ├─ 文件夹 / zip（完整包）──────────→ 方案二·本地（--from-dir / --from-zip，向导自动识别 Node / Python / Go / Rust / Java 等语言）
        ├─ 单个 index.js ────────────────→ 查依赖；缺则让用户给整个包或加 --npm-install（见方案二）
-       └─ npm 包名（如 @scope/server-xxx）→ 方案二·npx（--pkg，无需下载）
+       ├─ npm 包名（如 @scope/server-xxx）→ 方案二·npx（--pkg，无需下载）
+       └─ Python 包名（如 kegg-mcp-server）→ 方案二·uvx（--uvx-pkg，无需下载；需 --with 依赖时加 --uvx-with）
 ```
 
 ### 方案一：云端 MCP（JSON / URL）
@@ -127,15 +167,17 @@ node scripts/scaffold_mcp.js --name <服务名> --from-url '<url>' --api-key <�
 - 用户给文件夹或 zip → 直接走下面命令。
 
 ```
-# 给的是文件夹
-node scripts/scaffold_mcp.js --name <服务名> --from-dir '<包文件夹路径>'
+# 给的是文件夹（--name 可省略，省略时脚本自动从路径推断服务名）
+node scripts/scaffold_mcp.js [--name <服务名>] --from-dir '<包文件夹路径>'
 
-# 给的是 zip
-node scripts/scaffold_mcp.js --name <服务名> --from-zip '<zip路径>'
+# 给的是 zip（极简模式首选：用户只需给路径）
+node scripts/scaffold_mcp.js [--name <服务名>] --from-zip '<zip路径>'
 
 # 包内没有 node_modules 时，若要允许安装依赖（需联网）：
-node scripts/scaffold_mcp.js --name <服务名> --from-dir '<包文件夹>' --npm-install
+node scripts/scaffold_mcp.js [--name <服务名>] --from-dir '<包文件夹>' --npm-install
 ```
+
+> **极简模式（重点，呼应 5.0 节）**：药企研发等非 IT 用户只需说「配置 XX mcp，zip 在 YY」，AI 直接跑 `--from-zip "<zip路径>" --npm-install --self-check`（**name 省略、语言自动识别**）即可，用户无需懂命令行、无需记参数。Python 与 Node 走同一条命令，脚本自己认：Python 默认自动 `uv sync` 装依赖；Node 需 `--npm-install` 才会装依赖（加上无害，Python 会忽略该 flag）。
 
 **npx 远程包方式（无需下载 zip）**：若服务提供的是 npm 包名（如 `@scope/mcp-server-xxx`），运行时由 `npx -y` 自动拉取，无需你预先下载包或 zip：
 ```
@@ -147,9 +189,10 @@ node scripts/scaffold_mcp.js --name <服务名> --pkg <npm包名> [--env '{"KEY"
 
 脚本会自动：找到 `package.json` 根目录（兼容 zip 双重嵌套）→ 复制到 `~/.workbuddy/mcp-servers/<服务名>/` → 读 `main` 定位入口 → 检查 `node_modules`（缺则警告；有 `--npm-install` 则安装）→ 生成 `type:stdio / command:node / args:[入口]` 条目。
 
-**依赖决策（默认联网安装）**：若包内无 `node_modules`，**默认直接执行 `npm install`（联网）**，无需每回追问用户。仅当用户明确说「我有带 node_modules 的完整包 / 这是离线环境」时，才跳过安装、改让用户提供完整文件夹 / zip。
-- 默认 → 追加 `--npm-install`（脚本已自动基于 `package-lock.json` 安装依赖）
-- 用户自备完整包 / 离线 → 让用户提供含 `node_modules` 的文件夹 / zip，不加 `--npm-install`
+**依赖决策（各语言安装方式不同）**：
+- **Python**：包内无 `.venv` 时**默认自动 `uv sync` 装依赖**（无需任何 flag；`uv` 缺失时向导自动 `pip install uv` 补装）。
+- **Node**：包内无 `node_modules` 且**无 `build` 脚本**时，需显式加 `--npm-install` 才会联网安装依赖；不加则只告警、不安装（此时 MCP 会因缺依赖跑不起来）。`--from-zip "<zip>" --npm-install --self-check` 是 Node 包的稳妥写法。
+- 仅当用户明确说「我有带 node_modules 的完整包 / 这是离线环境」时，才跳过安装、改让用户提供完整文件夹 / zip。
 
 > 注：`npm install` 只是安装「用户已提供的这个包」的运行依赖（如 `@modelcontextprotocol/sdk`、`axios`），**不属于上网替用户找 MCP 源码**，不违反铁律第 1 条。
 
@@ -160,7 +203,7 @@ node scripts/scaffold_mcp.js --name <服务名> --pkg <npm包名> [--env '{"KEY"
 - **握手自检 + 自愈（兜底，覆盖未知包）**：scaffold 加 `--self-check` 会在写入后启动 MCP、发 `initialize`、检查其返回的 `capabilities`；若发现非标准 `experimental` 广播，加 `--harden` 即**自动剥离并重新编译**。即便包不在注册表里，也能自愈。
 > 这两个能力是当初配 `openpharma-org/fda-mcp-server` 时踩坑（纯 TS 源码需编译 + 广播 `experimental` 被宿主拒）后补上的，已沉淀进 skill，未来同类包自动处理。
 
-**command 形态与跨平台可移植性（设计决策）**：本地型条目默认用**可移植的裸 `"node"`**（`command: "node"`，依赖宿主 PATH 解析），这是权衡后的选择：
+**command 形态与跨平台可移植性（设计决策）**：本地型条目默认用**可移植的运行时**：Node 用裸 `"node"`（依赖宿主 PATH 解析）；Python 默认用**venv 绝对路径**（运行时不再依赖 PATH 中有 uv，最稳，可消除「Connection closed」类启动崩溃），也支持 `--uv` 改用可移植的 `uv --directory run`。绝对路径加固默认不自动执行，需用户显式 `--node` / 指定。
 - **跨用户 / 跨平台分享最稳**：各 AI 平台（WorkBuddy / Claude Desktop / VS Code / Cursor / Codex / OpenCode / 豆包工作 等）spawn MCP 时基本都会把自身或系统 node 放到 PATH；而 WorkBuddy 托管的 node 路径含**用户名与版本号、每台机器不同**，写死绝对路径反而跨机失效。
 - **平台识别作为扩展点**：`scaffold_mcp.js` 内置 `detectTargetPlatform()`（当前可识别 `workbuddy` / `unknown`）。未来支持更多平台只需加分支，不破坏现有逻辑。
 - **node 预检兜底**：配置时会对本地型条目跑 `node --version` 预检；若 PATH 不可达，仅提示用户常见 node 位置，**不自动改写为绝对路径**（避免破坏可移植性）。
@@ -169,6 +212,75 @@ node scripts/scaffold_mcp.js --name <服务名> --pkg <npm包名> [--env '{"KEY"
 **可选**：
 - `--node <node.exe 绝对路径>`：node 不在 PATH 时指定（参考现有条目的写法）。
 - `--overwrite`：安装目录已存在时覆盖。
+
+### 方案二·运行时类型自动识别（2026-11 新增，重点）
+
+**核心变化：用户不再需要知道"这是什么语言写的"。** 给一个文件夹或 zip，向导按"标记文件"自动识别运行时类型，然后按该语言的方式装依赖、找入口、生成配置、握手验证。Node 与 Python 已完整自动化；Go / Rust / Java / .NET 等做了"识别 + 预编译二进制直用 + 缺工具链时给清晰指引"的预案（见下表）。
+
+#### 运行时类型速查表（给非 IT 用户的人话版）
+
+| 类型 | 人话解释 | 向导自动做什么 | 你要不要装额外东西 |
+|---|---|---|---|
+| **云端 / SaaS** | 别人托管好的服务，给个网址+密钥就能用 | 写 `streamableHttp` 条目 | 不用 |
+| **Node.js** | 用 JavaScript 写的服务（最常见） | 复制包 → `npm install` 装依赖（缺则自动编译）→ 跑 `node` | 一般不用（主流平台自带 node） |
+| **Python** | 用 Python 写的服务（很多官方生物医药数据源如此） | 复制包 → `uv sync` 装依赖到本地 `.venv` → 跑 venv 里的 `python` | 需 **uv**；**缺失时向导自动 `pip install uv` 补装**，用户无需手动操作 |
+| **Go / Rust** | 编译型语言，通常发布成一个独立可执行文件 | 包里自带编译好的程序就直接用；否则先走 `--bin` 注册作者发布的现成程序（见下节三条出路） | 多数情况**不用**；只有作者没发程序才需要 IT 装工具链 |
+| **Java / Kotlin** | 企业级服务（如 cBioPortal 后端） | 需装 JDK + Maven/Gradle，自动打包成 `.jar` 后 `java -jar` | 需装 JDK + 构建工具 |
+| **.NET / C#** | 微软生态服务 | 需装 .NET SDK，自动 `dotnet build` 后运行 | 需装 .NET SDK |
+| **Ruby / PHP** | 少数服务用这俩写 | 需装对应运行时 + 包管理器，自动安装依赖 | 需装 Ruby/PHP 环境 |
+| **Docker（容器）** | 服务打包在容器里，本地跑起来后通过网址连接 | 识别出 Dockerfile 后会提示走 `docker run` + HTTP 端点（后续可加 `--from-docker` 自动化） | 需本机装 Docker |
+
+> 识别依据（标记文件）：Node=`package.json`、Python=`pyproject.toml`/`requirements.txt`、Go=`go.mod`、Rust=`Cargo.toml`、Java=`pom.xml`/`build.gradle`、.NET=`*.csproj`、Ruby=`Gemfile`、PHP=`composer.json`、Docker=`Dockerfile`/`docker-compose.yml`。
+
+#### Python 本地包的具体用法
+> 下述命令中的 `--name` 均可省略：极简模式（5.0 节）下脚本会自动从 zip / 目录名推断服务名，用户/AI 都不必显式给。
+```
+# 给源码文件夹（或 zip）即可，向导自动识别语言、uv sync、找入口、生成配置并握手
+node scripts/scaffold_mcp.js --name <服务名> --from-dir '<Python包目录>' [--self-check]
+node scripts/scaffold_mcp.js --name <服务名> --from-zip '<Python包.zip>' [--self-check]
+
+# 入口识别不到时，用 --entry 手动指定（如 server.py / gdc_mcp_server.py）
+node scripts/scaffold_mcp.js --name <服务名> --from-dir '<目录>' --entry server.py
+
+# 想要可移植写法（不写 venv 绝对路径，改用 uv --directory run；依赖目标机 PATH 有 uv）
+node scripts/scaffold_mcp.js --name <服务名> --from-dir '<目录>' --uv
+
+# Python 包已发布到 PyPI / uv 源、不想下载源码时，用 uvx 直接拉（无本地路径，等同 npx）
+node scripts/scaffold_mcp.js --name <服务名> --uvx-pkg <包名> [--uvx-with <依赖>] [--env '<环境变量>']
+```
+- **默认 command 用 venv 绝对路径**（如 `.../.venv/Scripts/python.exe`），运行时不再依赖 PATH 中有 uv，最稳。
+- 验证：`node scripts/verify_mcp.js --name <服务名>` 对 Python 条目同样适用（直接 spawn venv python 做握手）。
+
+#### 编译型语言（Go / Rust / Java / .NET）缺工具链时——**禁止劝退式回复**
+识别到这类包、但本机没有对应工具链时，**绝不能**第一句话就说"请先安装 Go 再重跑"。对研发同事，这等于当场宣告失败，并让他觉得这个 skill 不好用。必须按下面顺序给出路，**第 1 条完全不用装任何环境**：
+
+| 顺序 | 做法 | 对应动作 |
+|---|---|---|
+| **1（首选）** | 用作者发布的现成可执行文件；AI 主动去该项目 GitHub「Releases」页下载对应平台版本 | `node scripts/scaffold_mcp.js --bin "<下载的 .exe 路径>" --name <服务名> --self-check` |
+| **2** | 换云端托管版（给 URL + key 就能用） | 主动问一句「这个 MCP 有没有官方托管版 / 在线 API 版」 |
+| **3（最后）** | 确实只能本地跑 → 请 IT/开发同学装一次工具链，再重跑原命令由向导自动编译 | 须明说"这一步要 IT 出手，不是你能单机解决的" |
+
+- 给用户的第一句话必须交代**「不是你的操作问题，你的其它 MCP 不受影响，mcp.json 未改动」**（脚本已内置这段文案，直接转述，别自己另编）。
+- `--bin` 务必配 `--self-check`：下载来的程序是否真会说 MCP 协议必须握过手，才能对用户说"配好了"。
+- 编译型二进制若广播了 `experimental`，`--harden` **改不了二进制**：如实说"需要作者更新版本或改用云端版"，不要承诺"稍后自动修复"。
+
+#### 扩展点（给维护者）
+新增一种语言的完整自动化，只需在 `scripts/lang.js` 的 `handleLang` 里加一个 `handleXxx(installDir, a)` 分支（装依赖→找入口→返回 `entry` + `verifyCmd`），`detectLang` 已覆盖所有标记文件识别，无需改动 `scaffold_mcp.js`。
+
+### 参数纠正表（AI 自查，防误用）
+
+| 常见误用 | 正确做法 |
+|---|---|
+| 对 Python 包传 `--npm-install` | Python 走 `uv sync`，`--npm-install` 只对 Node 有意义；脚本已按语言自动选，**不用手传** |
+| 本地包忘了 `--self-check` | 本地 stdio 包一律加 `--self-check`，握手失败不要告诉用户"配好了" |
+| 用 `--from-dir` 指向 zip 文件 | zip 用 `--from-zip`，文件夹用 `--from-dir`，给错类型会报"找不到包标记" |
+| 用 `--from-url` 配本地服务 | 本地进程配 `stdio`（走 `--from-dir`/`--from-zip`）；只有对方真给了 http(s) 端点才用 `--from-url` |
+| 手写 `command` 为 `npx xxx` 猜包名 | 包名必须来自用户提供的来源；**绝不猜**（铁律 1） |
+| Python 入口识别失败就放弃 | 用 `--entry server.py` 显式指定，不要改源码 |
+| Go/Rust 包缺工具链 → 直接叫用户"装 Go 再重跑" | **禁止**。先走 `--bin` 注册作者发布的现成程序（免装环境）；装工具链是最后一条且要说明"需 IT 出手" |
+| 拿到现成 `.exe` 后再跑 `--from-dir` | 已经有机可执行文件就直接 `--bin "<exe 路径>"`，不必再复制源码 |
+| 用 `--bin` 却不加 `--self-check` | 下载来的程序是否真会说 MCP 协议未经验证，**必须**握手后才说"配好了" |
+| 覆盖同名条目时手动补 env | 脚本已自动保留原 `env`；仅当用户要**改**凭据时才传新的 `--env` |
 
 ### 凭据自适应（按需问用户）
 - 只需 API key → `--api-key`（云端）或 `--env '{"API_KEY":"..."}'`（本地）
@@ -187,6 +299,21 @@ node scripts/verify_mcp.js --name <服务名> --harden
 - **若返回里出现非标准 `capabilities.experimental`**：说明该服务器广播了严格宿主会拒绝的能力，加 `--harden` 让向导自动剥离并重新编译、再握手复验。这通常发生在某些第三方包（已知如 `openpharma-org/fda-mcp-server`）。
 - 云端（方案一）用 `curl -I` 确认可达即可。
 
+#### Python 类：编码探测（向导自动做，别跳过）
+
+握手成功后会**再用强制 GBK 环境握一次手**。原因是中文 Windows 上宿主拉起 Python 子进程时，stdout/stderr 的编码是 GBK(cp936)；服务端只要往这两条流打印 emoji 或中文符号（启动 banner、日志前缀极常见），Python 立刻 `UnicodeEncodeError` 并在握手完成前退出，客户端只看到 **`-32000: Connection closed`**。
+
+```
+✅ 强制 GBK 仍能握手：源码本身 UTF-8 安全，无隐患
+⚠️ 源码在纯 GBK 环境会崩：只能靠 env 兜底；别人照抄源码漏配 env 就会复现 -32000
+```
+
+- 向导**已默认给所有 Python 条目注入** `PYTHONIOENCODING=utf-8` + `PYTHONUTF8=1`（`lang.js` 的 `PY_ENV`）。**不要删这两条**，它们不是可选项。
+- 用户传 `--env` 时是**合并**而非覆盖，凭证和编码兜底共存。
+- **最容易误判的地方**：同一份代码在 Git Bash / Windows Terminal 里手跑通常正常（终端是 UTF-8），"我这儿能跑"**不构成**在宿主里能跑的证据。
+- `--no-gbk` 可跳过这次探测（仅在已确认源码安全、想省时间时用）。
+- 另一条独立检查：**stdout 污染检测**。若握手期间 stdout 出现非 JSON-RPC 行（横幅打到了 stdout），会单独告警——这类输出必须改到 `sys.stderr`，否则严格宿主解析失败。
+
 ### 交付清单（配完复制给用户）
 1. 已把 `<服务名>` 写进 `~/.workbuddy/mcp.json`。
 2. **⚠️ 必须重启 WorkBuddy（完全退出后重新打开，不是仅刷新对话）** —— 改了 `mcp.json` 后连接器列表不会热更新，不重启就看不到新装的 MCP。这一步一定要写在交付清单里提醒用户。
@@ -196,8 +323,12 @@ node scripts/verify_mcp.js --name <服务名> --harden
 
 ### 其它注意
 - 永远只增改单个 server 条目，不覆盖整个 mcp.json（脚本已保证）。
+- **写入安全**：改写前自动备份为 `<配置文件名>.bak`，再「临时文件 + 原子改名」替换；写入前会先自校验 JSON 可解析。若自检握手失败、想撤销，把 `.bak` 覆盖回去即可。
+- **同名重配**：会提示"已存在，将覆盖"，但**保留原条目的 `env`**（token/key 不会丢）。
+- **执行台账落盘**：每次配置（成功/失败）都会追加一行到 `~/.workbuddy/mcp-servers/.install-log.jsonl`。批量配多个 MCP 时用它核对进度，中断后不必凭记忆重跑。
 - 密钥不硬编码进脚本 / 仓库；提醒用户 apikey 明文存在 mcp.json，勿外泄。
 - mcp.json 开头若有 UTF-8 BOM，脚本会自动剥离。
+- **解压依赖**：`--from-zip` 优先用 `unzip`，失败回退系统解压；两者都不可用时会给出可读原因并建议改用 `--from-dir`。
 - `--from-template` 仅供「自己从零写一个 MCP」，第三方服务禁用。
 
 ---
@@ -227,6 +358,7 @@ node scripts/verify_mcp.js --name <服务名> --harden
 | 握手报协议版本不匹配 | MCP 与宿主协议版本不兼容 | 升级服务端或宿主；或暂用替代服务 |
 | 本地型缺依赖 | 无 `node_modules` | 重跑脚本追加 `--npm-install` |
 | 握手报 `capabilities.experimental.* Invalid input` | 服务器在 `initialize` 返回里广播了非标准 `experimental` 能力，被严格宿主拒绝 | 跑 `verify_mcp.js --name <服务名> --harden` 自动剥离并重建；或 scaffold 时加 `--self-check --harden` |
+| 连接时整体报 `-32000: Connection closed`，同一批其它 MCP 都正常 | 该 Python 类 MCP 启动时向 stdout/stderr 打印了 emoji / 中文符号，GBK(cp936) 下 `UnicodeEncodeError` 崩在握手前（**不是配置写错**） | 给该条目 `env` 加 `PYTHONIOENCODING=utf-8` + `PYTHONUTF8=1`（向导已默认注入）；根治则把源码里的 emoji 改成 ASCII 并输出到 `sys.stderr`。⚠️ 在终端手跑同一份代码通常是好的，**不能**据此判断宿主里没问题 |
 | 远端 MCP 报 `Local file paths are not supported` / 提示 `open_upload_ui` | 远端服务器无本地文件系统访问权限（设计限制，**非配置问题**） | 不要改配置；用该 MCP 的 `open_upload_ui` 工具拿浏览器上传链接，或传一个远端可访问的公开 URL。注意：这是 MinerU 等远端文件类 MCP 的常态，与鉴权/JSON 无关 |
 | 远端 MCP 报 `404 Not Found` 且指向**提供方自己的后端域名**（如 `mineru.net/file-urls/batch`） | 提供方 MCP 服务端 bug / 临时故障：常把请求打到**不存在或已迁移的端点**（如漏了 `/api/v4` 前缀），并非你的配置错 | **不是你的 mcp.json 问题**。诊断：把 MCP 实际调用的 URL 与提供方官方文档端点对比——若正确端点返回 405/401 而 MCP 调用的返回 404，说明 MCP 硬编码了错误路径，向提供方反馈。可暂用其主站/REST API 替代。若 404 指向外部不可控域名则另查网络 |
 | 上传 UI 提示「未检测到 API Token / 使用 Flash 模式」或解析只给 Markdown | token 没传导到上传/解析会话（提供方 MCP 服务端缺陷），退化成游客/Flash 模式 | 若握手层已证明 token 有效（如 `MINERU_API_TOKEN` 头 200、`Bearer` 401），则属提供方服务端 bug，不是你的字段配错；向提供方反馈，或改用其主站/REST API |
