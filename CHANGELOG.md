@@ -12,10 +12,6 @@
 
 ---
 
-## [Unreleased]
-
-- **`release.sh` 补齐 `APPDATA` / `LOCALAPPDATA`**：嵌套执行（CI / 助手 / 其它脚本调用）除 `USERPROFILE`、`TEMP` 外还会丢 `APPDATA`，而 `gh` 在 Windows 上把凭据存在 `%APPDATA%\GitHub CLI`，缺了会被误判成"未登录"从而跳过 Release 创建。已在环境补齐段落中一并还原，实测嵌套环境下 `gh auth status` 恢复正常。此脚本不随包分发，不影响发行内容。
-
 ## [1.4.2] — 2026-11-02
 
 **发行包剔除个人维护脚本；修正 manifest 排除项与压测脚本里写死的本机路径**
@@ -29,7 +25,7 @@
 **维护者工具（仓库内保留，不随包分发）**
 
 - `scripts/publish.js`：打包到临时暂存目录（源目录零改动）→ 版本三处校验 → 调 skillhub CLI；changelog 不手填时从本文件对应段落按整节累积提取，默认 400 字并在要点边界截断。
-- `scripts/release.sh`：一键完成"发布平台 → 提交 → 打 tag → 推送 → 建 Release → 回验"。顺序是先发布成功再动 git，平台失败时 git 零改动、可直接重跑；内含六道前置校验，并补齐嵌套调用时丢失的 `USERPROFILE` / `TEMP`（Windows 版 Python 取家目录只认 `USERPROFILE`）。
+- `scripts/release.sh`：一键完成"发布平台 → 提交 → 打 tag → 推送 → 建 Release → 回验"。顺序是先发布成功再动 git，平台失败时 git 零改动、可直接重跑；内含六道前置校验，并补齐嵌套调用时丢失的 `USERPROFILE` / `TEMP` / `APPDATA` / `LOCALAPPDATA`（Windows 版 Python 取家目录只认 `USERPROFILE`，`gh` 把凭据存在 `%APPDATA%\GitHub CLI`，缺了会被误判"未登录"从而跳过 Release 创建）。
 - `.gitattributes`：强制 `*.sh` / `*.js` 用 LF，避免 `core.autocrlf` 把脚本换成 CRLF 后在 Git Bash 里报 `bad interpreter`。
 
 ## [1.4.1] — 2026-11-02
