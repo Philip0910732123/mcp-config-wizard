@@ -10,19 +10,27 @@
 #   bash scripts/stress_test.sh            # 跑完自动清理夹具
 #   bash scripts/stress_test.sh --keep     # 保留夹具（位于 $ROOT）便于排查
 #
-# 环境：本机 /tmp 在 Write/Bash/Node 三者解析不一致，Node 把 /tmp 映射到
-#   C:\Users\hupan\AppData\Local\Temp，故夹具默认落在 Windows 临时目录。
-#   换机器可用 MCP_STRESS_ROOT 环境变量覆盖：MCP_STRESS_ROOT=/tmp/foo bash scripts/stress_test.sh
+# 环境：夹具默认落在系统临时目录，且统一转成正斜杠路径——脚本后面会把 $ROOT
+#   拼进 JSON 夹具，Windows 的反斜杠路径在 JSON 里会变成 \U 之类的非法转义。
+#   改位置用 MCP_STRESS_ROOT 覆盖：MCP_STRESS_ROOT=/tmp/foo bash scripts/stress_test.sh
 
 set -u
 
-export PATH="/d/Git/usr/bin:/d/Git/cmd:$PATH"
+# Git Bash 下 coreutils 不全时补上网关路径；其它系统该目录不存在，自动跳过
+if [ -d /d/Git/usr/bin ]; then export PATH="/d/Git/usr/bin:/d/Git/cmd:$PATH"; fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SC="$SCRIPT_DIR/scaffold_mcp.js"
 VR="$SCRIPT_DIR/verify_mcp.js"
 
-ROOT="${MCP_STRESS_ROOT:-C:/Users/hupan/AppData/Local/Temp/mcp_stress}"
+# 夹具根目录：优先 MCP_STRESS_ROOT；否则取 Node 的 os.tmpdir()，再退回 shell 的临时目录。
+# 用 Node 解析是为了与脚本内部 Node 看到的是同一个位置（bash 与 node 对 /tmp 的解析常不一致）。
+ROOT="${MCP_STRESS_ROOT:-}"
+if [ -z "$ROOT" ]; then
+  _tmp="$(node -e 'process.stdout.write(require("os").tmpdir())' 2>/dev/null | tr '\\' '/')"
+  [ -n "$_tmp" ] || _tmp="${TMPDIR:-${TMP:-/tmp}}"
+  ROOT="$_tmp/mcp_stress"
+fi
 MJ="$ROOT/out.json"
 
 KEEP=0
@@ -88,7 +96,8 @@ main() {
   echo "scaffold_mcp.js 压测："
   run_test "T1 非 mcpServers JSON 且无 --name" "ERR:不是 mcpServers JSON" "" node "$SC" --from-json '{"foo":1}' --mcp-json "$MJ"
   run_test "T2 URL 含占位符但无 --api-key" "ERR:URL 含密钥占位符" "" node "$SC" --from-url 'https://x.com/mcp?key=YOUR_API_KEY' --name t2 --mcp-json "$MJ"
-  run_test "T3 URL+key 正常替换" "OK" "SECRET123" node "$SC" --from-url 'https://x.com/mcp?key=YOUR_API_KEY' --name t3 --api-key SECRET123 --dry-run --mcp-json "$MJ"
+  run_test "T3 URL+key 替换成功且 dry-run 输出脱敏" "OK" "key=***" node "$SC" --from-url 'https://x.com/mcp?key=YOUR_API_KEY' --name t3 --api-key SECRET123 --dry-run --mcp-json "$MJ"
+  run_test "T3b 落盘仍写明文 key（脱敏只作用于输出）" "OK" "" bash -c "node \"$SC\" --from-url 'https://x.com/mcp?key=YOUR_API_KEY' --name t3b --api-key SECRET123 --mcp-json '$ROOT/t3b.json' >/dev/null && grep -q SECRET123 '$ROOT/t3b.json' && echo wrote-plaintext"
   run_test "T4 from-json 含 mcpServers 识别" "OK" "streamableHttp" node "$SC" --from-json '{"mcpServers":{"s1":{"url":"https://x/mcp","disabled":false}}}' --dry-run --mcp-json "$MJ"
   run_test "T5 from-dir 无 node_modules 告警" "OK" "无 node_modules" node "$SC" --from-dir "$ROOT/fixture_nodeps" --name t5 --dry-run --mcp-json "$MJ"
   run_test "T6 from-dir 有 node_modules" "OK" "已含 node_modules" node "$SC" --from-dir "$ROOT/fixture_withdeps" --name t6 --dry-run --mcp-json "$MJ"

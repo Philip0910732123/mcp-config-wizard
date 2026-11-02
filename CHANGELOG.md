@@ -12,39 +12,21 @@
 
 ---
 
-## [Unreleased]
+## [1.4.2] — 2026-11-02
 
-**维护者发版脚本 `scripts/publish.js`（打包时自动排除，不随技能分发）**
+**发行包剔除个人维护脚本；修正 manifest 排除项与压测脚本里写死的本机路径**
 
-- **解决平台拒收 `.gitignore`**：原来发布要手动把 `.gitignore` 移出目录、发完再移回，容易忘。现在改为复制到临时目录时直接排除开发期文件（`.gitignore`、`.git*`、`node_modules`、`*.log/*.tmp/*.bak`、脚本自身），源目录一个字节都不动。
-- **发版前版本校验**：`SKILL.md` 与 `skill.manifest.json` 版本不一致时直接失败；`--version` 与文件内版本不一致也失败（防版本漂移，`--force` 可绕过）；缺 `v<版本>` tag 或 tag 未推送只告警不阻断；工作区有未提交改动会提示。
-- **changelog 自动生成**：不传 `--changelog` 时，从 `CHANGELOG.md` 对应版本段落提取，按「整节累积」在要点边界截断（默认 400 字），不会把一句话切一半；也可 `--changelog "..."` 手填。
-- **用法**：`node scripts/publish.js [--dry-run] [--changelog "…"] [--max-chars 400] [--keep] [--force]`；python 与 CLI 路径可自动探测，也可 `--python` / `--cli` 或 `SKILLHUB_PYTHON` / `SKILLHUB_CLI` 指定。
-- **实测**：`--dry-run` 通过（14 个文件，`.gitignore` 与脚本自身已排除）；`--version 1.4.9` 被拦并返回退出码 1；自动 changelog 提取 428 字，末尾落在完整要点上。
-- **暂存目录可写性兜底**：环境变量被裁剪时 `os.tmpdir()` 可能指向不可写的 `C:\WINDOWS\temp`，新增 `resolveStageRoot()` 依次试探 `tmpdir` → `~/.cache` → 技能目录。
+- **维护脚本不再随包分发**：`publish.js` / `release.sh` / `stress_test.sh` 收拢为 `MAINTAINER_FILES` 常量统一排除，发行包由 14 个文件降为 13 个；打包后新增断言，暂存目录里一旦出现维护者工具就清空暂存并中止发版（退出码 1），不再依赖"记得加排除项"这种人工约束。
+- **`SKILL.md` §8 脚本清单收敛**：移除 `stress_test.sh` 一行，只保留用户真正会用的 4 个脚本与 2 个共享库。
+- **`skill.manifest.json` 的 `exclude_paths` 修正**：原来声明排除 `templates`，而 `scaffold_mcp.js --from-template` 正要读 `templates/local-index.js` 生成骨架——声明与实现矛盾，若安装器按该声明剥离会直接 `ENOENT`。改为只排除三个维护者脚本，与打包规则保持一致。
+- **`stress_test.sh` 夹具目录可移植**：原来写死本机用户目录下的临时路径，别人克隆仓库后跑不起来。改为取 Node 的 `os.tmpdir()` 并统一转正斜杠（反斜杠拼进 JSON 夹具会变成 `\U` 之类的非法转义），仍可用 `MCP_STRESS_ROOT` 覆盖；`/d/Git/usr/bin` 的 PATH 兜底改为该目录存在时才追加。
+- **回归压测用例修正**：T3 因 1.4.1 的 dry-run 脱敏已改为断言输出为 `key=***`，并新增 T3b 验证落盘仍写明文 key（脱敏只作用于输出）；现为 16 / 16 通过。
 
-**一键发版脚本 `scripts/release.sh`（同样不随技能分发）**
+**维护者工具（仓库内保留，不随包分发）**
 
-把"发布平台 + 提交 + 打 tag + 推送 + 建 Release + 回验"固化成一条命令，并把过去真实踩过的坑做前置校验：
-
-- **顺序改为"先发布成功，再动 git"**：平台发布失败时 git 零改动，可直接重跑，不会留下"提交了但没发出去"的半成品状态。
-- **六道前置校验**：版本号三处一致（`SKILL.md` / `skill.manifest.json` / 命令行）、`CHANGELOG.md` 必须有 `## [x.y.z]` 段落、tag 未被本地或远端占用、平台最新版不是同版本、全部 JS 脚本 `node --check` 通过、打包预检通过。
-- **changelog 与 Release 说明同源**：commit 主题取该版本段落首句，commit 正文与 GitHub Release 正文取整段 markdown，不再手工复制。
-- **收尾回验**：比对本地 tag 与远端 tag 缩写，并查询平台 `latestVersion`；若仍是旧版本则提示"审核中"。
-- **嵌套调用环境修复**：Git Bash 被 CI / 助手二次调用时会丢掉 `USERPROFILE` 与 `TEMP`，而 Windows 上的 Python 取家目录只认 `USERPROFILE`，缺了会让 skillhub CLI 崩在 `Could not determine home directory`；脚本内自行补齐这两个变量。
-- **用法**：`bash scripts/release.sh [版本] [--dry-run] [--yes] [--skip-github] [--skip-platform]`；`--help` 查看全部参数。
-- **`.gitattributes`**：强制 `*.sh` / `*.js` 用 LF，避免 Windows 的 `core.autocrlf` 把脚本换成 CRLF 后在 Git Bash 里报 `bad interpreter`。
-
-**维护者工具一律不进发布包**
-
-- 维护脚本集中在 `MAINTAINER_FILES` 常量（`publish.js`、`release.sh`、`stress_test.sh`），打包时统一排除；`--dry-run` 会明示"已排除维护者工具"。
-- 打包后新增**兜底断言**：暂存目录里一旦出现维护者工具就清空暂存并中止发版，宁可这次发不出去，也不把个人工具分发给用户（含本机专属路径，别人拿到即报错）。
-- `SKILL.md` §8 脚本清单移除 `stress_test.sh`——它是本机回归压测，夹具路径写死 Windows 临时目录，不属于用户可用脚本。
-
-**`skill.manifest.json` 的 `exclude_paths` 修正**
-
-- 原来声明排除 `templates`，但 `scaffold_mcp.js` 的 `--from-template` 要读 `templates/local-index.js` 生成骨架——声明与实现相矛盾，若安装器按该声明剥离，该功能会直接 `ENOENT`。已把 `templates` 从排除项移除，改为排除三个维护者脚本（与打包排除保持一致）。
-- **实测复核**：`--dry-run` 待上传 13 个文件，`templates/` 三个文件仍在包内，维护者脚本均不在。
+- `scripts/publish.js`：打包到临时暂存目录（源目录零改动）→ 版本三处校验 → 调 skillhub CLI；changelog 不手填时从本文件对应段落按整节累积提取，默认 400 字并在要点边界截断。
+- `scripts/release.sh`：一键完成"发布平台 → 提交 → 打 tag → 推送 → 建 Release → 回验"。顺序是先发布成功再动 git，平台失败时 git 零改动、可直接重跑；内含六道前置校验，并补齐嵌套调用时丢失的 `USERPROFILE` / `TEMP`（Windows 版 Python 取家目录只认 `USERPROFILE`）。
+- `.gitattributes`：强制 `*.sh` / `*.js` 用 LF，避免 `core.autocrlf` 把脚本换成 CRLF 后在 Git Bash 里报 `bad interpreter`。
 
 ## [1.4.1] — 2026-11-02
 
