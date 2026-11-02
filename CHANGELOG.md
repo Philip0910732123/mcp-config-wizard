@@ -12,6 +12,10 @@
 
 ---
 
+## [Unreleased]
+
+- **`release.sh` 补齐 `APPDATA` / `LOCALAPPDATA`**：嵌套执行（CI / 助手 / 其它脚本调用）除 `USERPROFILE`、`TEMP` 外还会丢 `APPDATA`，而 `gh` 在 Windows 上把凭据存在 `%APPDATA%\GitHub CLI`，缺了会被误判成"未登录"从而跳过 Release 创建。已在环境补齐段落中一并还原，实测嵌套环境下 `gh auth status` 恢复正常。此脚本不随包分发，不影响发行内容。
+
 ## [1.4.2] — 2026-11-02
 
 **发行包剔除个人维护脚本；修正 manifest 排除项与压测脚本里写死的本机路径**

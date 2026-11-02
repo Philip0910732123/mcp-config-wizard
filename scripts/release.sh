@@ -104,6 +104,14 @@ if [ -z "${TEMP:-}" ]; then
 fi
 [ -n "${TEMP:-}" ] && { export TEMP; export TMP="$TEMP"; }
 
+# gh 在 Windows 上把凭据存在 %APPDATA%\GitHub CLI，缺了 APPDATA 会被判成"未登录"
+if [ -z "${APPDATA:-}" ] && [ -n "${USERPROFILE:-}" ]; then
+  APPDATA="$USERPROFILE\\AppData\\Roaming"; export APPDATA
+fi
+if [ -z "${LOCALAPPDATA:-}" ] && [ -n "${USERPROFILE:-}" ]; then
+  LOCALAPPDATA="$USERPROFILE\\AppData\\Local"; export LOCALAPPDATA
+fi
+
 # ---------- 1. 版本号三处一致 ----------
 step "1. 版本一致性"
 if [ -z "$VERSION" ]; then
