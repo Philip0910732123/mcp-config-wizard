@@ -41,6 +41,11 @@
 - 打包后新增**兜底断言**：暂存目录里一旦出现维护者工具就清空暂存并中止发版，宁可这次发不出去，也不把个人工具分发给用户（含本机专属路径，别人拿到即报错）。
 - `SKILL.md` §8 脚本清单移除 `stress_test.sh`——它是本机回归压测，夹具路径写死 Windows 临时目录，不属于用户可用脚本。
 
+**`skill.manifest.json` 的 `exclude_paths` 修正**
+
+- 原来声明排除 `templates`，但 `scaffold_mcp.js` 的 `--from-template` 要读 `templates/local-index.js` 生成骨架——声明与实现相矛盾，若安装器按该声明剥离，该功能会直接 `ENOENT`。已把 `templates` 从排除项移除，改为排除三个维护者脚本（与打包排除保持一致）。
+- **实测复核**：`--dry-run` 待上传 13 个文件，`templates/` 三个文件仍在包内，维护者脚本均不在。
+
 ## [1.4.1] — 2026-11-02
 
 **补齐 uvx 类 MCP 的启动失败根因、服务名合法性与 dry-run 脱敏**

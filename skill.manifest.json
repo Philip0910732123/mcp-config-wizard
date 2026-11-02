@@ -8,7 +8,9 @@
   "exclude_paths": [
     ".git",
     "node_modules",
-    "templates"
+    "scripts/publish.js",
+    "scripts/release.sh",
+    "scripts/stress_test.sh"
   ],
   "runtime": {
     "node_version": ">=18",
