@@ -33,9 +33,18 @@ const { spawnSync } = require('child_process');
 
 const SKILL_DIR = path.resolve(__dirname, '..');
 
-// 打包时排除：开发期文件与版本控制产物，以及本脚本自身（维护者工具，用户不需要）
+// 维护者工具：只在本机用，绝不随包分发（用户拿了用不上，且含本机专属路径）
+const MAINTAINER_FILES = new Set(['publish.js', 'release.sh', 'stress_test.sh']);
+
+// 打包时排除：开发期文件、版本控制产物、维护者工具
 const EXCLUDE_DIRS = new Set(['.git', '.github', 'node_modules', '__pycache__', '.idea', '.vscode']);
-const EXCLUDE_FILES = new Set(['.gitignore', '.gitattributes', '.DS_Store', 'Thumbs.db', 'publish.js', 'release.sh']);
+const EXCLUDE_FILES = new Set([
+  '.gitignore',
+  '.gitattributes',
+  '.DS_Store',
+  'Thumbs.db',
+  ...MAINTAINER_FILES
+]);
 const EXCLUDE_SUFFIX = ['.log', '.tmp', '.bak', '.pyc'];
 
 const C = {
@@ -213,6 +222,14 @@ function stage(stageDir) {
       else list.push(path.relative(stageDir, full).split(path.sep).join('/'));
     }
   })(stageDir);
+
+  // 兜底断言：维护者工具漏进包就中止发版，宁可发不出去也不要分发给用户
+  const leaked = list.filter((f) => MAINTAINER_FILES.has(path.basename(f)));
+  if (leaked.length) {
+    try { fs.rmSync(stageDir, { recursive: true, force: true }); } catch {}
+    die(`维护者工具混进了发布包：${leaked.join(', ')}\n    → 检查 EXCLUDE_FILES 是否漏了它（${path.join(SKILL_DIR, 'scripts', path.basename(leaked[0]))}）`);
+  }
+
   return list.sort();
 }
 
@@ -275,6 +292,7 @@ function main() {
   const files = stage(stageDir);
   console.log(C.bold(`\n=== 待上传文件（${files.length}）===`));
   for (const f of files) console.log('  ' + f);
+  console.log(C.dim(`  已排除维护者工具：${[...MAINTAINER_FILES].join(', ')}（仅本机使用，不随包分发）`));
 
   const py = resolvePython(a.python);
   const cli = resolveCli(a.cli);

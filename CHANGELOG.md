@@ -35,6 +35,12 @@
 - **用法**：`bash scripts/release.sh [版本] [--dry-run] [--yes] [--skip-github] [--skip-platform]`；`--help` 查看全部参数。
 - **`.gitattributes`**：强制 `*.sh` / `*.js` 用 LF，避免 Windows 的 `core.autocrlf` 把脚本换成 CRLF 后在 Git Bash 里报 `bad interpreter`。
 
+**维护者工具一律不进发布包**
+
+- 维护脚本集中在 `MAINTAINER_FILES` 常量（`publish.js`、`release.sh`、`stress_test.sh`），打包时统一排除；`--dry-run` 会明示"已排除维护者工具"。
+- 打包后新增**兜底断言**：暂存目录里一旦出现维护者工具就清空暂存并中止发版，宁可这次发不出去，也不把个人工具分发给用户（含本机专属路径，别人拿到即报错）。
+- `SKILL.md` §8 脚本清单移除 `stress_test.sh`——它是本机回归压测，夹具路径写死 Windows 临时目录，不属于用户可用脚本。
+
 ## [1.4.1] — 2026-11-02
 
 **补齐 uvx 类 MCP 的启动失败根因、服务名合法性与 dry-run 脱敏**

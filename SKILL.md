@@ -447,7 +447,6 @@ node scripts/probe_mcp_http.js --url "https://h/mcp?apikey=x" # URL 参数型，
 | `scaffold_mcp.js` | 写入 / 复制 / 装依赖 / 编译 / 生成条目（`--name` 可省略，自动从路径推断） | `0` 成功 |
 | `verify_mcp.js` | **stdio** 握手 + `capabilities.experimental` 检测（`--harden` 自愈）+ 强制 GBK 编码探测 | `0` 通过 / `1` 握手失败 |
 | `probe_mcp_http.js` | **streamableHttp** 四步实测（真对照 / session / tools/list / 真实调用），也是会话失效时的旁路客户端 | `0` 通过 / `1` 握手失败 / `2` 工具或调用失败 |
-| `stress_test.sh` | 多包 / 多形态的批量回归压测 | 见脚本内输出 |
 | `lib.js` / `lang.js` | 共享工具：源码补丁、capabilities 硬化、运行时识别与依赖安装 | — |
 
 ```bash
