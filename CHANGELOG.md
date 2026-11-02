@@ -12,6 +12,56 @@
 
 ---
 
+## [1.4.1] — 2026-11-02
+
+**补齐 uvx 类 MCP 的启动失败根因、服务名合法性与 dry-run 脱敏**
+
+- **`--uvx-python <版本>`（新增参数）**：uvx 类 MCP 启动失败的**头号原因**是 uvx 默认用「最新 Python」——新版刚发布时 `pydantic-core` / `onnxruntime` / `tokenizers` 没有预编译 wheel，uvx 退化成拉 sdist 现场编译 Rust/C++，在宿主启动预算内必然超时，表现为 `Failed to connect` / `Connection closed`，日志里有 `cargo rustc` / `maturin failed`。钉扎 3.12 即可绕开。
+  本机实测 `uv python list` 默认已是 **3.14.7**，正踩在这个组合上，不是纸上风险。生成的 args 顺序有讲究：`["--python","3.12","--with",…,"<包名>"]`（选项必须在包名之前）。
+- **`onnxruntime` DLL 依赖坑**（排错表）：缺 VC++ 2015-2022 Redistributable 会报 `ImportError: DLL load failed ... onnxruntime_pybind11_state`，与 mcp.json 无关。
+- **「配置刚改」vs「连接器已掉线」二分法**（交付清单 + 排错表）：原文档一律叫人重启 WorkBuddy。实际应区分——**配置改过** → 重启重读；**配置没动、只是某个连接器掉线** → 连接器页点「重新连接」重生进程，不必重启整个应用。
+- **服务名合法性校验 + 「新服务必须是独立键」铁律**：`scaffold_mcp.js` 新增 `sanitizeName` / `assertName`，显式 `--name` 含非法字符直接拒绝并给建议名（未写入任何文件）；从路径推断的名称自动规范化。现有 24 个条目实测全部合规。铁律新增第 7、8 条（不要塞进已有条目的 `env`；名称字符集限制）。
+- **`--dry-run` 输出脱敏（顺手修的自身漏洞）**：原 dry-run 会把整份 mcp.json 打进终端，含 5 个明文 apikey，粘贴进聊天/工单即泄露。新增 `maskDeep()`：URL 里的凭据参数换成 `***`、`env`/`headers` 里的 `*_KEY`/`*_TOKEN`/`*_PASSWORD` 只留首尾与长度；「条目:」回显同样脱敏。**落盘仍写原值**（已实测文件未被改动）。
+- **新增 §9「把这份配置搬到别的 Agent」**：Claude Code / Cursor / Antigravity 的路径、字段、生效方式对照。其中最有价值的硬事实是 **Claude Code 必须用 `claude mcp add` 注册，手改 `.mcp.json` 不被识别**；Antigravity 用 `transport: "stdio"` 而 WorkBuddy 用 `type: "stdio"`。注明"发给客户前先脱敏"。
+
+**本轮评估过、决定暂不支持的做法（附理由，避免以后反复纠结）**
+- **scope 体系（local / user / project）**：WorkBuddy 只有 `~/.workbuddy/mcp.json` 单文件、用户级；工作区内实测无项目级配置。强行引入只会让 agent 多问一轮无用的问题。
+- **多配置文件排查清单、热重载命令（`/reload-plugins` / `/mcp` / `/doctor`）、UTCP / code-mode / isolated-vm**：均属其它宿主专属，WorkBuddy 无对应物。
+- **`${VAR}` 环境变量插值**：概念对我们有用（mcp.json 里 key 是明文），但**在 WorkBuddy 上是否支持未能验证**（官方文档 MCP 页 404、站内搜索无结果），不写入文档以免造成"以为支持"的错误预期；待验证后再补。
+- **预置"常用服务清单"**：不可靠。实测 `npm view @anthropics/mcp-playwright` → **不存在**（真包名是 `@playwright/mcp` 0.0.84）。**带错误的包名清单不能写进文档**，本技能继续坚持"包名必须来自用户或官方来源，绝不猜"。
+
+## [1.4.0] — 2026-11-02
+
+**补齐远端验证的短板：新增 `probe_mcp_http.js`；修掉 `verify_mcp.js` 让 experimental 自愈长期失效的取值 bug**
+
+背景：对验证能力做了一次全量自检并拿本机 24 个真实 MCP 交叉实测，发现两个实质缺口——
+① 远端（streamableHttp）验证只有 `curl -I`，答不了"凭据是否有效、工具是否真能调"；
+② `verify_mcp.js` 从 `tools/list` 的响应里取 `serverInfo` / `capabilities`，而这两个字段只在 `initialize` 响应里存在，
+导致 `serverInfo` 恒为 `null`、`capabilities` 永远取不到，**`capabilities.experimental` 检测与 `--harden` 自愈在验收入口上是死代码**。
+
+- **修 `verify_mcp.js` 取值 bug（核心）**：把 `serverInfo` / `capabilities` / `protocolVersion` 的捕获挪到 `id===1`（initialize）分支，
+  再随结果返回。修复后用带非空 `experimental` 的 mock 服务端实测：检测告警 → `--harden` 剥离 → 复验通过，链路完整走通。
+- **`verify_mcp.js` 新增 `initialize` 报错直报**：服务端明确拒绝初始化时（如协议版本不兼容），原先会被忽略并最终报成"超时"，
+  把人引向"缺依赖 / 路径错"的错误方向；现在直接报协议层错误并提示可用 `--harden`。
+- **`verify_mcp.js` 输出与措辞校准**：打印 `serverInfo` 名称+版本、`protocolVersion`、工具数与清单；GBK 探测结论由
+  "源码本身 UTF-8 安全，无隐患"（过乐观）改为"协议流不受编码影响"，并新增 stderr 日志乱码提示（实测中确有服务端 stdout 正常、stderr 乱码）。
+- **新增 `scripts/probe_mcp_http.js`（远端四步实测）**：
+  - **四种鉴权形态自动识别**：`url`（`?apikey=`）/ `bearer`（Authorization 头）/ `header`（自定义头）/ `env`（宿主转发成同名头）；
+  - **真对照按形态剥**：URL-key 型删 URL 参数、头型删头。修掉"只删 Authorization 就去断言鉴权未生效"的经典误判；
+  - **结论措辞对齐证据强度**：凭据"必需"= 无凭据被 401/403；凭据"有效"只认"无凭据被拒 + 真实 `tools/call` 成功"，握手成功只算"没被拒"；
+  - **识别 `result.isError`**：MCP 把业务错误包在 `result.isError` 里、HTTP 仍 200，只看 `error` 字段会把执行失败误判成成功（实测踩到，已单独判定并给退出码 2）；
+  - **会话失效旁路**：每次运行重新握手，宿主 session 过期时可直接 `--call` 继续干活；区分"从没成功过（缺 initialized）"与"先成功后全挂（会话过期）"；
+  - 支持 `--name` 直读 `mcp.json`（验宿主实际会用的配置，含注入 env）、`--url` 直连、`--no-contrast`、`--timeout`、`--protocol`；
+  - 输出**凭据脱敏**（`apikey=***`、令牌只留首尾），避免把 key 贴进聊天记录。
+- **SKILL.md 重构验证章节**：新增 §0.1「唯一入口 + 验证器按传输形态分工」；§5 拆成 5.1 stdio / 5.2 远端四步；
+  方案一不再用 `curl -I` 交付；排错表新增 7 行（URL-key 误判、401 字段名、403 scope、会话过期、`isError` 藏 200、冷启动等）；
+  新增 §8 脚本清单与退出码，§9 边界说明。
+- **实测**：`probe_mcp_http.js` 对 `patsnap-patent-legal`（URL-key 型）→ 剥 apikey 得 **401 + WWW-Authenticate(scope=mcp:read)**，
+  真实调用 `legal_data` 成功；伪造工具名 → 正确判为 `isError` 失败并给退出码 2；`string`（公开端点）→ 正确判定"未发现凭据、跳过对照"；
+  Bearer / 自定义头两种形态用合成参数各跑一遍，均正确给出"该端点未校验此凭据"而非"令牌有效"。
+- **定位说明**：本技能是 MCP 配置的唯一入口，验证按传输形态分工——`command`（本地 stdio）用 `verify_mcp.js`，
+  `url`（远端）用 `probe_mcp_http.js`，两者都支持 `--name` 直读 `mcp.json`，不必手敲命令。
+
 ## [1.3.1] — 2026-11-01
 
 **去掉"缺 uv 就报错"的门槛：向导自动补装 uv；并更正 1.3.0 的一处归因错误**

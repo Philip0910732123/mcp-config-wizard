@@ -1,10 +1,10 @@
 ---
 name: mcp-config-wizard
-description: 面向生物医药研发场景，把"选什么/审什么"（决策）与"怎么装进 WorkBuddy"（执行）合二为一。覆盖：按需选型清单（商业 SaaS 情报类 + 化学/靶点/临床/结构等科学数据 MCP，几十个也能管）、安装前安全审查、配置进 WorkBuddy（云端 streamableHttp / 本地 stdio 自动脚手架+握手验证）、多 MCP 治理与排错。触发词：配置 MCP、加一个 MCP 服务、MCP 选型、MCP 安全吗、MCP 配不上、MCP 太多怎么管、配置 PDB/ChEMBL/智慧芽、给 AI 接数据源/API。不适用于：MCP 服务端源码开发/从零编写（本 skill 只做接入与治理，不写服务本身）、非 WorkBuddy 平台的 MCP 配置（路径与入口不同）、纯理论科普而不落地配置。
+description: 面向生物医药研发场景，把"选什么/审什么"（决策）与"怎么装进 WorkBuddy / 装完到底通不通"（执行+验证）合二为一。覆盖：按需选型清单（商业 SaaS 情报类 + 化学/靶点/临床/结构等科学数据 MCP，几十个也能管）、安装前安全审查、配置进 WorkBuddy（云端 streamableHttp / 本地 stdio 自动脚手架）、**远端协议级深验（鉴权形态自动识别 → 真对照 → 会话 → tools/list → 真实调用）**、多 MCP 治理与排错。触发词：配置 MCP、加一个 MCP 服务、MCP 选型、MCP 安全吗、MCP 配不上、MCP 连不上、工具没出现、这个连接器正常吗、令牌是不是有效、工具中文乱码、Connection closed、Unknown or missing Mcp-Session-Id、MCP 太多怎么管、配置 PDB/ChEMBL/智慧芽、给 AI 接数据源/API。不适用于：MCP 服务端源码开发/从零编写（本 skill 只做接入与治理，不写服务本身）、非 WorkBuddy 平台的 MCP 配置（路径与入口不同）、纯理论科普而不落地配置。
 slug: mcp-config-wizard
 displayName: MCP 选型与配置向导
-version: 1.3.1
-summary: 生物医药研发场景的 MCP 选型、安全审查与一键配置向导，覆盖 stdio / streamableHttp / SSE 三类接入与多 MCP 治理排错。
+version: 1.4.1
+summary: 生物医药研发场景的 MCP 选型、安全审查、一键配置与协议级实测验证；覆盖 stdio / streamableHttp 接入、四种鉴权形态的真对照、多 MCP 治理排错。
 license: MIT
 ---
 
@@ -20,6 +20,19 @@ license: MIT
 - 「MCP 配不上 / 配不进去 / 配了不生效」「我装了几十个 MCP，怎么管？」
 
 一句话决策流：**需求驱动 → 安全审查 → 按需启用 → 配置验证 → 持续治理**。
+
+### 0.1 本技能是唯一入口，验证器按传输形态分工
+
+用户说「配不上 / 连不上 / 工具没出现 / 令牌有效吗」时，**不要转去别的技能**——选型、安装、协议级验证、排错全在本技能内闭环。验证按传输形态分两个脚本，别用错：
+
+| 条目形态 | 判断依据 | 用哪个脚本 | 验的是什么 |
+|---|---|---|---|
+| **stdio 本地** | `mcp.json` 里是 `command` + `args` | `verify_mcp.js` | spawn 进程 → initialize → tools/list + 编码探测 |
+| **streamableHttp 远端** | 有 `url`（无 `command`） | `probe_mcp_http.js` | 鉴权真对照 → initialize → session → tools/list → 可选真实调用 |
+
+两者都支持 `--name <名字>` 直读 `~/.workbuddy/mcp.json`，**验的就是宿主实际会用的那份配置（含注入的 env）**，而不是你手敲的近似命令。
+
+> 只做「HTTP 200 / 能握手」就交付，是这个领域最常见的假阳性。**远端要能说清三件事：凭据是不是必需、凭据是不是有效、工具是不是真能调**（详见 5.2）。
 
 ---
 
@@ -77,7 +90,7 @@ license: MIT
 
 ## 5. 执行：配置进 WorkBuddy
 
-> 全程不要手写 mcp.json，用本 skill 的脚本（`scripts/scaffold_mcp.js` / `scripts/verify_mcp.js`）。核心只让用户提供：**配置来源（JSON/URL 或本地文件）** 与 **凭据（API key / 用户名密码）**。
+> 全程不要手写 mcp.json，用本 skill 的脚本（`scripts/scaffold_mcp.js` 写入 / `scripts/verify_mcp.js` 验 stdio / `scripts/probe_mcp_http.js` 验远端）。核心只让用户提供：**配置来源（JSON/URL 或本地文件）** 与 **凭据（API key / 用户名密码）**。
 
 ### 铁律（强制执行层：先读，违反即失败）
 1. **绝不上网搜索 / 下载 MCP 源码**。源码只能来自：用户给的 JSON、用户给的 URL、用户给的本地文件 / 文件夹 / zip。找不到就让用户提供。
@@ -86,6 +99,8 @@ license: MIT
 4. WorkBuddy 的 mcp.json 每条**必须带 `type`**：本地 `stdio`，远程 `streamableHttp`。脚本已自动处理。
 5. 第三方真实服务**禁止用 `--from-template`**（那只是「hello」占位骨架，握手能过但根本不是真服务）。
 6. **写入即备份**：脚本在改写 `mcp.json` 前会自动存一份同名 `.bak`，并用「临时文件 + 原子改名」替换，避免半截写入毁掉全部 MCP 配置。重配同名服务时，**原条目的 `env` 凭据会被保留**（不会被新条目抹掉）。
+7. **新增服务必须是 `mcpServers` 下的独立键**。不要把它塞进某个已有条目的 `env` 或 args 里——宿主只会按顶层键注册服务，塞进去等于没配。
+8. **服务名只用字母、数字、点、下划线、连字符**。带空格 / 中文 / 斜杠的名字会让连接器页显示与工具路由出问题，脚本会直接拒绝并给建议名。
 
 ### 暂停规则（必须暂停的 5 种情况）
 
@@ -150,7 +165,12 @@ node scripts/scaffold_mcp.js --name <服务名> --from-url '<url>' --api-key <�
 ```
 - **密钥占位**：URL/JSON 里出现 `{your_api_key}`、`<your_api_key>`、`YOUR_API_KEY`、`REPLACE_ME` 等 → 先问用户要真实 key，用 `--api-key` 传入，脚本自动替换。
 - 若没给 `--api-key` 但存在占位，脚本会报错提醒——此时回去问用户要 key。
-- 验证：`curl -I <url>` 能通即可。
+- 验证：**不要用 `curl -I` 交付**——它只能证明端口活着，证明不了鉴权形态、也证明不了工具能调。用真探针：
+  ```
+  node scripts/probe_mcp_http.js --name <服务名>
+  # 要拿到「凭据有效」的硬证据，再加一次只读调用：
+  node scripts/probe_mcp_http.js --name <服务名> --call <只读工具名> --args '{}'
+  ```
 
 > ⚠️ **远端 streamableHttp 的鉴权字段「因服务而异」，务必以官方配置为准（实测踩坑）**：不同远端 MCP 期望的鉴权字段不同——MinerU 远端（`mcp.mineru.net`）要 `env: {MINERU_API_TOKEN: "<token>"}`（WorkBuddy 会把 `env` 转发成同名请求头 `MINERU_API_TOKEN`）；McDSaver 等则要 `headers: {"Authorization":"Bearer <token>"}`。**没有「远端必须用 headers、env 无效」的统一规则**，切勿把 A 服务的写法套到 B 服务（曾把 MinerU 错改成 `Authorization: Bearer`，被服务器 401 拒绝）。**判定方法：以该 MCP 官方配置为准；配完实测握手，若出现 401 / 鉴权错误，先查「字段名对不对、Bearer 前缀有没有漏」**，而不是盲目换字段。
 > 补充：WorkBuddy 在 `streamableHttp` 下**会转发 `env`**（作为同名请求头），所以官方用 `env` 的远端服务直接照抄即可，不必改成 `headers`。
@@ -247,7 +267,13 @@ node scripts/scaffold_mcp.js --name <服务名> --from-dir '<目录>' --uv
 
 # Python 包已发布到 PyPI / uv 源、不想下载源码时，用 uvx 直接拉（无本地路径，等同 npx）
 node scripts/scaffold_mcp.js --name <服务名> --uvx-pkg <包名> [--uvx-with <依赖>] [--env '<环境变量>']
+
+# uvx 装不上 / 启动超时 / 日志里出现 cargo・maturin 时，钉扎解释器版本：
+node scripts/scaffold_mcp.js --name <服务名> --uvx-pkg <包名> --uvx-python 3.12
 ```
+> 🔴 **uvx 默认用「最新 Python」，这是 Windows 上 uvx 类 MCP 最常见的启动失败原因**。新版 Python（如 3.14 / 3.15）刚发布时，`pydantic-core`、`onnxruntime`、`tokenizers` 等带二进制组件的包常常还没有对应 wheel，uvx 会退化成拉 sdist 现场编译 Rust/C++，在宿主给的启动预算内必然超时，表现就是 `Failed to connect` / `Connection closed`，日志里能看到 `cargo rustc` / `maturin failed`。
+> 判定与处置：先用 `uv python list` 看本机 uv 默认版本（本机实测默认已是 3.14）；**遇到上述症状就直接加 `--uvx-python 3.12`（或任何有 wheel 的版本）重配一次**，别去怀疑 URL/令牌。
+> 另一个 Windows 专属坑：包若依赖 `onnxruntime`（如经 `fastembed` 做本地向量的服务），缺 **VC++ 2015-2022 Redistributable** 会报 `ImportError: DLL load failed while importing onnxruntime_pybind11_state`。装 `winget install Microsoft.VCRedist.2015+.x64` 即可，与 mcp.json 无关。
 - **默认 command 用 venv 绝对路径**（如 `.../.venv/Scripts/python.exe`），运行时不再依赖 PATH 中有 uv，最稳。
 - 验证：`node scripts/verify_mcp.js --name <服务名>` 对 Python 条目同样适用（直接 spawn venv python 做握手）。
 
@@ -277,6 +303,8 @@ node scripts/scaffold_mcp.js --name <服务名> --uvx-pkg <包名> [--uvx-with <
 | 用 `--from-url` 配本地服务 | 本地进程配 `stdio`（走 `--from-dir`/`--from-zip`）；只有对方真给了 http(s) 端点才用 `--from-url` |
 | 手写 `command` 为 `npx xxx` 猜包名 | 包名必须来自用户提供的来源；**绝不猜**（铁律 1） |
 | Python 入口识别失败就放弃 | 用 `--entry server.py` 显式指定，不要改源码 |
+| uvx 类启动失败就先怀疑 key / URL | 先看日志有没有 `cargo` / `maturin`：多半是 uvx 用了最新 Python、无预编译 wheel。加 `--uvx-python 3.12` 重配 |
+| 服务名随手写（带空格 / 中文 / 斜杠） | 只允许字母、数字、点、下划线、连字符；脚本会直接拒绝并给出建议名，别绕过 |
 | Go/Rust 包缺工具链 → 直接叫用户"装 Go 再重跑" | **禁止**。先走 `--bin` 注册作者发布的现成程序（免装环境）；装工具链是最后一条且要说明"需 IT 出手" |
 | 拿到现成 `.exe` 后再跑 `--from-dir` | 已经有机可执行文件就直接 `--bin "<exe 路径>"`，不必再复制源码 |
 | 用 `--bin` 却不加 `--self-check` | 下载来的程序是否真会说 MCP 协议未经验证，**必须**握手后才说"配好了" |
@@ -288,18 +316,51 @@ node scripts/scaffold_mcp.js --name <服务名> --uvx-pkg <包名> [--uvx-with <
 - 其它 token / OAuth → 问清变量名，放进 `--env` 或 JSON 的 `headers`
 - 永远是「先问用户要真实值」，不要编造。
 
-### 握手验证（本地 stdio 必做）
+### 握手验证（按形态选脚本，两类都必做）
+
+#### 5.1 本地 stdio
 ```
 node scripts/verify_mcp.js --name <服务名>
 # 若握手报 capabilities.experimental.* Invalid input，加 --harden 自动剥离并重建后重验：
 node scripts/verify_mcp.js --name <服务名> --harden
 ```
-- 会 spawn 进程 → `initialize` → `notifications/initialized` + `tools/list` → 返回工具名列表；并**打印服务器返回的 `capabilities`**。
+- 会 spawn 进程 → `initialize` → `notifications/initialized` + `tools/list` → 打印 `serverInfo` / `protocolVersion` / `capabilities` / 工具清单。
 - 通过才算配好；失败按 stderr 排错（常见：缺 node_modules、node 不在 PATH、包名 / 入口错）。
-- **若返回里出现非标准 `capabilities.experimental`**：说明该服务器广播了严格宿主会拒绝的能力，加 `--harden` 让向导自动剥离并重新编译、再握手复验。这通常发生在某些第三方包（已知如 `openpharma-org/fda-mcp-server`）。
-- 云端（方案一）用 `curl -I` 确认可达即可。
+- **若返回里出现非标准 `capabilities.experimental`**（非空对象才算）：说明该服务器广播了严格宿主会拒绝的能力，加 `--harden` 让向导自动剥离并重新编译、再握手复验。已知如 `openpharma-org/fda-mcp-server`。
+  > 注：`experimental: {}`（空对象）是合法的，脚本**不会**误报，也不需要硬化。
+- `initialize` 被明确拒绝（返回 JSON-RPC error）时会直接报协议层错误，不会再伪装成「超时」。
 
-#### Python 类：编码探测（向导自动做，别跳过）
+#### 5.2 远端 streamableHttp（四步实测，不能用 curl 代替）
+```
+node scripts/probe_mcp_http.js --name <服务名>
+node scripts/probe_mcp_http.js --name <服务名> --call <只读工具> --args '{}'
+node scripts/probe_mcp_http.js --url <url> --token <t>        # 没有 mcp.json 条目时
+node scripts/probe_mcp_http.js --url "https://h/mcp?apikey=x" # URL 参数型，自动识别
+```
+**四步**：① 鉴权真对照 → ② `initialize` → ③ `notifications/initialized` + `tools/list` → ④ 真实调用一个只读工具。
+
+**四种鉴权形态自动识别**（不许假设"一律 Bearer"）：
+
+| 形态 | 配置长什么样 | 对照怎么剥 | 常见服务 |
+|---|---|---|---|
+| `url` | key 在 `url` 的 query 里（`?apikey=`） | **删 URL 参数**（不是删头） | 智慧芽 connect 系列 |
+| `bearer` | `headers.Authorization: Bearer x` | 删 Authorization 头 | McDSaver 等 |
+| `header` | 其它自定义头（`X-API-Key`） | 删该头 | 部分商业 API |
+| `env` | `env: {TOKEN: x}`（宿主转发成同名头） | 删该头 | MinerU 远端 |
+
+> 🔴 **最常见的误判**：对 URL-key 型端点只删 `Authorization` 头去做对照，会得到"未鉴权也 200 → 鉴权未生效"的**错误结论**——因为 key 一直在 URL 里没被删。`probe_mcp_http.js` 按识别到的形态剥，不会犯这个错。
+
+**结论措辞必须对齐证据强度**（脚本已内置，别自己另编）：
+- 「凭据**必需**」= 无凭据被 401/403 拒绝；
+- 「凭据**有效**」只认两条硬证据：无凭据被拒 **且** 真实 `tools/call` 成功。**握手成功只等于"没被拒"，不等于"令牌有效"**；
+- `tools/list` 列的是服务端全部工具，**不代表这把凭据都能调**（实测见过清单 18 个、实际 403）。汇报时分开讲「平台能做什么」和「你这把凭据能做什么」。
+
+**两个必须识别的坑**：
+- 🔴 **`result.isError: true` 藏在 200 里**：MCP 常把业务错误包成 `result.isError`，HTTP 200、也没有 JSON-RPC error。只看 `error` 字段会把「执行失败」误判成「调用成功」，凭据结论直接失真。脚本已单独判定并给 2 的退出码。
+- 🔴 **`Unknown or missing Mcp-Session-Id` 有两种性质**：从没成功过 = 缺 `notifications/initialized`（协议要求，补会话流程即可）；**先成功后突然全挂** = 宿主客户端持有的 session 过期，**不是服务端故障、也不是令牌失效**——别删配置、别换令牌。诊断：直连 `initialize` 拿新 session 能通即证明服务端健康。旁路：`probe_mcp_http.js --call` 每次重握手，可直接继续干活；根治让用户重连 MCP / 重启 WorkBuddy。
+- 从 403 反查 scope：故意调一个不该有的工具，服务端常回显完整允许清单，一次调用即得权限范围。
+
+#### 5.3 Python 类 stdio 的编码探测（属 5.1，向导自动做，别跳过）
 
 握手成功后会**再用强制 GBK 环境握一次手**。原因是中文 Windows 上宿主拉起 Python 子进程时，stdout/stderr 的编码是 GBK(cp936)；服务端只要往这两条流打印 emoji 或中文符号（启动 banner、日志前缀极常见），Python 立刻 `UnicodeEncodeError` 并在握手完成前退出，客户端只看到 **`-32000: Connection closed`**。
 
@@ -316,10 +377,14 @@ node scripts/verify_mcp.js --name <服务名> --harden
 
 ### 交付清单（配完复制给用户）
 1. 已把 `<服务名>` 写进 `~/.workbuddy/mcp.json`。
-2. **⚠️ 必须重启 WorkBuddy（完全退出后重新打开，不是仅刷新对话）** —— 改了 `mcp.json` 后连接器列表不会热更新，不重启就看不到新装的 MCP。这一步一定要写在交付清单里提醒用户。
-3. 重启后打开 **连接器管理页 → 右上角「自定义连接器」→ 找到 `<服务名>` → 点「信任」启用**（新 MCP 不会自动生效）。
-4. 调用试试（例如「用 `<服务名>` 查一下 XX」）。
-5. 报错贴给我。
+2. **已验证**（没验过不许说"配好了"）：stdio → 握手通过、N 个工具；远端 → 四步结论（凭据必需？凭据有效？工具可调？）。
+3. **⚠️ 改了 `mcp.json` 必须重启 WorkBuddy（完全退出后重新打开，不是仅刷新对话）** —— 配置不会热更新，不重启就看不到新装的 MCP。
+   > 区分两种情况，别一律叫人重启：**配置刚改过** → 重启（重读配置）；**配置没动、只是某个连接器掉线** → 到连接器页对该 server 点「重新连接」即可。
+4. 重启后打开 **连接器管理页 → 右上角「自定义连接器」→ 找到 `<服务名>` → 点「信任」启用**（新 MCP 不会自动生效）。
+   > 审批状态记在 `~/.workbuddy/mcp-approvals.json`。**不要自己去改这个文件"替用户信任"**——那是绕过安全确认。
+5. 远端服务要一并交代**权限边界**：凭据绑定的身份、`tools/list` 清单 ≠ 实际可调范围、可见性字段默认值。
+6. 调用试试（例如「用 `<服务名>` 查一下 XX」）。
+7. 报错贴给我。
 
 ### 其它注意
 - 永远只增改单个 server 条目，不覆盖整个 mcp.json（脚本已保证）。
@@ -340,7 +405,7 @@ node scripts/verify_mcp.js --name <服务名> --harden
 - **按需启停**：用不到的服务器在连接器页关闭 / 不点「信任」，需要时一键开启。这是控制「工具过多导致模型选错、上下文臃肿」的主要手段。
 - **分组心法**：脑中按领域分组（专利文献 / 化学 / 靶点 / 临床 / 结构 / 办公），当前任务只需启用相关那组。
 - **季度清点**：长期不可用 / 连续 90 天没用过的，禁用或卸载，别堆着。
-- **兼容性巡检**：新装一个后跑一遍 `verify_mcp.js` 握手；注意协议版本兼容（例如某些 MCP 与宿主存在协议版本不匹配导致整体握手失败，需升级或替换）。
+- **兼容性巡检**：新装一个后跑一遍验证（stdio → `verify_mcp.js`；远端 → `probe_mcp_http.js`）；注意协议版本兼容（例如某些 MCP 与宿主存在协议版本不匹配导致整体握手失败，需升级或替换）。
 - **升级重审**：服务升级后权限需求变化的，重新过第 4 节审查五步法。
 - **密钥轮换**：付费 MCP 的 key 泄露或过期，及时在 `mcp.json` 对应条目更新，团队共用模板不含真实凭证。
 
@@ -362,10 +427,57 @@ node scripts/verify_mcp.js --name <服务名> --harden
 | 远端 MCP 报 `Local file paths are not supported` / 提示 `open_upload_ui` | 远端服务器无本地文件系统访问权限（设计限制，**非配置问题**） | 不要改配置；用该 MCP 的 `open_upload_ui` 工具拿浏览器上传链接，或传一个远端可访问的公开 URL。注意：这是 MinerU 等远端文件类 MCP 的常态，与鉴权/JSON 无关 |
 | 远端 MCP 报 `404 Not Found` 且指向**提供方自己的后端域名**（如 `mineru.net/file-urls/batch`） | 提供方 MCP 服务端 bug / 临时故障：常把请求打到**不存在或已迁移的端点**（如漏了 `/api/v4` 前缀），并非你的配置错 | **不是你的 mcp.json 问题**。诊断：把 MCP 实际调用的 URL 与提供方官方文档端点对比——若正确端点返回 405/401 而 MCP 调用的返回 404，说明 MCP 硬编码了错误路径，向提供方反馈。可暂用其主站/REST API 替代。若 404 指向外部不可控域名则另查网络 |
 | 上传 UI 提示「未检测到 API Token / 使用 Flash 模式」或解析只给 Markdown | token 没传导到上传/解析会话（提供方 MCP 服务端缺陷），退化成游客/Flash 模式 | 若握手层已证明 token 有效（如 `MINERU_API_TOKEN` 头 200、`Bearer` 401），则属提供方服务端 bug，不是你的字段配错；向提供方反馈，或改用其主站/REST API |
+| 远端「未鉴权也返回 200 → 鉴权未生效」 | 凭据根本不在 Authorization 头里（在 URL 参数 / 自定义头 / env 转发头），只删头等于没做对照 | 用 `probe_mcp_http.js` 让它按识别到的形态剥（URL-key 就删 URL 参数）；别手写只删 Authorization 的对照 |
+| `401` 但令牌"看着没过期" | 鉴权**字段名/位置**不对，不是令牌本身的问题 | 以该服务官方 MCP 配置为准照抄：`Bearer ` 前缀有没有漏、该用 `headers` 还是 `env`、URL 参数名是 `apikey` 还是 `api_key`。**别把 A 服务的写法套到 B 服务** |
+| `403` + 回显允许的工具清单 | 凭据被识别但无该工具的 scope（设计内白名单） | 告知用户授权范围，或申请加白；不是配置错，别反复改 `mcp.json` |
+| 原本正常、突然**全部**报 `Unknown or missing Mcp-Session-Id` | 宿主客户端持有的 session 过期（不是服务端故障、也不是令牌失效） | 别删配置别换令牌。直连 `initialize` 拿新 session 能通即证明服务端健康；旁路：`probe_mcp_http.js --call` 可直接继续；根治：重连 MCP / 重启 WorkBuddy |
+| `tools/call` 返回 200、内容里却是 `isError: true` | 业务错误被包在 `result` 里（参数错 / 无权限 / 无额度），协议层"成功" | 看 `_meta.error_code` 与提示文案；核对参数名与取值口径。**这种不能算"配好了"** |
+| 远端首次调用超时、第二次就好 | 服务端冷启动 | 重试一次再判断，别急着改配置 |
+| uvx 类首次连接失败，日志里有 `cargo rustc` / `maturin failed` | uvx 用了最新 Python（3.14/3.15），依赖包尚无预编译 wheel → 退化成源码编译、超时 | 加 `--uvx-python 3.12` 重配；先 `uv python list` 确认默认版本。改完记得重启让新条目生效 |
+| `ImportError: DLL load failed while importing onnxruntime_pybind11_state` | 缺 VC++ 2015-2022 Redistributable（onnxruntime 的原生依赖） | `winget install Microsoft.VCRedist.2015+.x64`；与 mcp.json 无关 |
+| 改了 `mcp.json`，连接器列表毫无变化 | 宿主内存里是旧配置，磁盘已更新（stale config） | 重启 WorkBuddy 重读配置。**这与"连接器掉线"不是一回事**，见下一行 |
+| 配置没动过，某个连接器突然不可用 / Failed to reconnect | 进程崩了或网络中断，配置本身没问题 | 连接器页对该 server 点「重新连接」让宿主重生进程，**不必重启整个应用**；仍不行再按本表往下查 |
 
 ---
 
-## 8. 边界说明
+## 8. 脚本清单与退出码
+
+| 脚本 | 用途 | 退出码 |
+|---|---|---|
+| `scaffold_mcp.js` | 写入 / 复制 / 装依赖 / 编译 / 生成条目（`--name` 可省略，自动从路径推断） | `0` 成功 |
+| `verify_mcp.js` | **stdio** 握手 + `capabilities.experimental` 检测（`--harden` 自愈）+ 强制 GBK 编码探测 | `0` 通过 / `1` 握手失败 |
+| `probe_mcp_http.js` | **streamableHttp** 四步实测（真对照 / session / tools/list / 真实调用），也是会话失效时的旁路客户端 | `0` 通过 / `1` 握手失败 / `2` 工具或调用失败 |
+| `stress_test.sh` | 多包 / 多形态的批量回归压测 | 见脚本内输出 |
+| `lib.js` / `lang.js` | 共享工具：源码补丁、capabilities 硬化、运行时识别与依赖安装 | — |
+
+```bash
+NODE=C:/Users/<用户名>/.workbuddy/binaries/node/versions/<ver>/node.exe   # 自查：where node
+$NODE scripts/verify_mcp.js     --name gdc
+$NODE scripts/probe_mcp_http.js --name patsnap-patent-legal --call legal_data --args '{"patent_number":"US10000000B2"}'
+```
+
+> 输出里的凭据一律脱敏（`apikey=***`、令牌只留首尾）。要把输出贴给别人前，仍建议过一眼。
+
+---
+
+## 9. 把这份配置搬到别的 Agent（给同事 / 客户发配置时用）
+
+WorkBuddy 只认 `~/.workbuddy/mcp.json`（单文件、用户级、无 project scope）。同一份服务要给别人用，**不能直接把字段抄过去**——各家 Agent 的文件路径、字段名、生效方式都不同：
+
+| Agent | 配置文件 | 关键差异 | 生效方式 |
+|---|---|---|---|
+| WorkBuddy | `~/.workbuddy/mcp.json`，键在 `mcpServers` 下 | 本地条目**必须带 `type: "stdio"`**；远端 `type: "streamableHttp"`；`env` 在远端会被转发成同名请求头 | 重启 WorkBuddy，再在连接器页点「信任」 |
+| Claude Code | `./.mcp.json`（project）/ `~/.claude.json`（user、local） | **必须用 `claude mcp add` 命令注册，手改配置文件不被识别**；另有 local（仅当前项目、仅本机）/ user / project 三种 scope | CLI 注册；会话内 `/reload-plugins`；`/mcp` → Reconnect |
+| Cursor | `~/.cursor/mcp.json` | 不需要 `type` / `transport` 字段 | 设置页 MCP 开关切换，或重启 Cursor |
+| Antigravity | `~/.gemini/antigravity/mcp_config.json` | **必须加 `"transport": "stdio"`**（字段名与 WorkBuddy 的 `type` 不同） | 重启 IDE |
+
+- **互转时最容易错的三个字段**：① `type`（WorkBuddy）/ `transport`（Antigravity）/ 不带（Cursor）；② 本地与远端的类型取值写法；③ 键名 `mcpServers` 的位置（Claude Code 的 local scope 埋在 `projects[<path>].mcpServers` 里）。
+- **发出去之前先脱敏**：`scaffold_mcp.js --dry-run` 的输出已做脱敏（URL 里 `apikey=***`、其余凭据只留首尾），可直接贴给别人；但**直接发 `mcp.json` 原文件前务必手查**——里面的 key 是明文。
+- 服务名规则各家一致：只用字母、数字、点、下划线、连字符。
+
+---
+
+## 10. 边界说明
 - MCP 生态迭代快，具体服务器的安装命令与配置格式以其官方仓库最新文档为准。
 - 授予 AI 系统权限意味着接受相应风险，生产环境接入请先经安全团队评估。
 - 本 skill 的脚本只处理「用户已提供的配置」，**不会替你上网寻找或下载 MCP 源码**。

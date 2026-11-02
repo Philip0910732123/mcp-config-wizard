@@ -25,6 +25,9 @@ function usage() {
   --index <index.js路径>    已有 index.js（Node）
   --pkg <npm包名>           npx 方式拉取（Node 包，无需本地下载）
   --uvx-pkg <uv包名>        uvx 方式拉取（Python 包，如 kegg-mcp-server；可配 --uvx-with 加 --with 依赖）
+  --uvx-python <版本>       配合 --uvx-pkg 钉扎解释器（如 3.12）。uvx 默认用最新 Python，
+                            遇到 pydantic-core / onnxruntime 等无预编译 wheel 的包会退化成源码编译，
+                            常见症状：日志里出现 cargo/maturin、启动超时、Failed to connect。钉 3.12 可绕开。
 
 通用选项:
   --mcp-json <路径>         mcp.json 路径（默认 ~/.workbuddy/mcp.json）
@@ -91,7 +94,28 @@ function inferName(p) {
   let base = path.basename(String(p));
   base = base.replace(/\.(zip|tar\.gz|tgz|tar)$/i, '');
   base = base.replace(/[-_]?source$/i, '');
-  return base || 'mcp';
+  return sanitizeName(base);
+}
+
+// 服务名规范：只允许字母、数字、点、下划线、连字符。
+// 空格 / 中文 / 斜杠会让宿主在工具路由、连接器页显示上出问题，部分平台直接拒收。
+function sanitizeName(s) {
+  const n = String(s == null ? '' : s).trim()
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '');
+  return n || 'mcp';
+}
+function assertName(s) {
+  const n = String(s == null ? '' : s).trim();
+  if (!/^[A-Za-z0-9._-]+$/.test(n)) {
+    const hint = sanitizeName(n);
+    throw new Error(
+      `服务名 "${n}" 含非法字符。只允许字母、数字、点、下划线、连字符（例：patsnap-patent-legal）。` +
+      (hint !== 'mcp' ? ` 建议改成：${hint}` : '')
+    );
+  }
+  return n;
 }
 
 function readMcpJson(p) {
@@ -100,6 +124,45 @@ function readMcpJson(p) {
   const j = JSON.parse(raw);
   if (!j.mcpServers) j.mcpServers = {};
   return j;
+}
+
+// ---- 输出脱敏 ----
+// dry-run 与「条目:」回显会把配置打到终端，而 mcp.json 里通常是明文凭据
+// （URL 里的 apikey、headers 的 Authorization、env 的 *_KEY/*_TOKEN）。
+// 这些输出一旦被粘贴进聊天记录、工单或截图就泄露了，所以打印前统一脱敏。
+const MASK_Q = /^(apikey|api[_-]?key|key|token|access[_-]?token|auth|authorization|secret|password|passwd|sig|signature)$/i;
+const MASK_KV = /(key|token|secret|password|passwd|pwd|credential)/i;
+
+function maskValue(s) {
+  const t = String(s);
+  if (t.length <= 8) return '***';
+  return t.slice(0, 4) + '…' + t.slice(-2) + `(${t.length})`;
+}
+
+function maskDeep(v, keyHint) {
+  if (typeof v === 'string') {
+    // 形如 https://h/mcp?apikey=xxx 的 URL：只替换凭据参数的值，保留结构便于核对
+    if (/^https?:\/\//i.test(v)) {
+      try {
+        const u = new URL(v);
+        let touched = false;
+        for (const k of [...u.searchParams.keys()]) {
+          if (MASK_Q.test(k)) { u.searchParams.set(k, '***'); touched = true; }
+        }
+        return touched ? u.toString() : v;
+      } catch { return v; }
+    }
+    // 凭据类字段（env 的 DB_PASSWORD、headers 的 Authorization 等）直接掩码
+    if (keyHint && MASK_KV.test(keyHint)) return maskValue(v);
+    return v;
+  }
+  if (Array.isArray(v)) return v.map((x) => maskDeep(x, keyHint));
+  if (v && typeof v === 'object') {
+    const o = {};
+    for (const k in v) o[k] = maskDeep(v[k], k);
+    return o;
+  }
+  return v;
 }
 // 执行台账：每次安装/失败追加一行 JSONL，便于批量配多个 MCP 时核对"哪些已做、哪些没做"。
 // 台账写失败绝不影响主流程（静默忽略）。
@@ -296,6 +359,11 @@ async function selfCheckAndHeal(meta, name, a) {
 async function main() {
   const a = parseArgs(process.argv.slice(2));
   if (a.help || a.h) { usage(); process.exit(0); }
+  // 显式 --name 一律先校验：非法字符写进 mcp.json 后，连接器页显示与工具路由都可能异常。
+  if (a.name) {
+    try { a.name = assertName(a.name); }
+    catch (e) { console.error('❌ ' + e.message); console.error('   （未写入任何文件）'); process.exit(1); }
+  }
   const dryRun = !!a['dry-run'];
   const mcpPath = a['mcp-json'] || defaultMcpJson();
   const apiKey = a['api-key'];
@@ -420,7 +488,11 @@ async function main() {
 
     } else if (a['uvx-pkg']) {
       if (!a.name) throw new Error('--uvx-pkg 需要 --name');
-      const args = a['uvx-with'] ? ['--with', a['uvx-with'], a['uvx-pkg']] : [a['uvx-pkg']];
+      // 顺序有讲究：--python / --with 必须在该包名之前，否则 uvx 会把它们当成包参数传下去。
+      const args = [];
+      if (a['uvx-python']) args.push('--python', String(a['uvx-python']));
+      if (a['uvx-with']) args.push('--with', a['uvx-with']);
+      args.push(a['uvx-pkg']);
       let ent = { type: 'stdio', command: 'uvx', args, disabled: false };
       // 合并而不是覆盖：lang.js 为 Python 条目预置了 UTF-8 env 兜底，
       // 用户传 --env 时不能把它冲掉，否则中文 Windows 上会崩在握手前。
@@ -482,13 +554,13 @@ async function main() {
     data.mcpServers[nm] = ent;
   }
   if (dryRun) {
-    console.log('[dry-run] 合并结果:\n' + JSON.stringify(data, null, 2));
+    console.log('[dry-run] 合并结果（凭据已脱敏：URL 里 apikey=***、其余只留首尾）:\n' + JSON.stringify(maskDeep(data), null, 2));
     process.exit(0);
   }
   writeMcpJson(mcpPath, data);
   console.log('✅ 已写入', mcpPath);
   for (const [nm, ent] of Object.entries(entries)) {
-    console.log('条目:', nm, JSON.stringify(ent));
+    console.log('条目:', nm, JSON.stringify(maskDeep(ent)));
     logInstall({ server: nm, ok: true, type: ent.type, command: ent.command, lang: (localMeta[nm] && localMeta[nm].lang) || null, config: mcpPath });
   }
   console.log('⚠️ 新 MCP 不会自动生效：请在连接器管理页右上角「自定义连接器」入口点「信任」启用。');

@@ -65,6 +65,10 @@ function run(entry, timeoutMs, opts) {
     let done = false;
     // stdout 里不符合 JSON-RPC 的行 = 协议流被污染（例如启动横幅打到了 stdout）
     const polluted = [];
+    // 🔴 serverInfo / capabilities / protocolVersion 只在 initialize（id=1）的响应里存在。
+    // 之前误从 tools/list（id=2）的响应里取，导致 serverInfo 恒为 null、capabilities 永远拿不到，
+    // 进而 capabilities.experimental 检测与 --harden 自愈全部失效。必须在这里接住。
+    let initResult = null;
 
     const timer = setTimeout(() => {
       if (done) return;
@@ -98,13 +102,33 @@ function run(entry, timeoutMs, opts) {
         buf = buf.slice(idx + 1);
         if (!line) continue;
         let m; try { m = JSON.parse(line); } catch { polluted.push(line); continue; }
+        if (m.id === 1 && m.error) {
+          // initialize 被服务端明确拒绝（协议版本不兼容 / capabilities 校验失败等）。
+          // 必须如实报错，不能让它继续等到超时——超时的报错文案会把人引向"缺依赖/路径错"。
+          done = true; clearTimeout(timer);
+          try { child.kill(); } catch {}
+          const e = m.error || {};
+          return reject(new Error(
+            `initialize 被服务端拒绝：${e.code} ${e.message || ''}\n` +
+            `   这属于协议层不兼容（不是路径/依赖问题）。若报 capabilities.experimental / Invalid input，` +
+            `加 --harden 重跑可自动剥离。stderr: ${errBuf.slice(-300)}`
+          ));
+        }
         if (m.id === 1 && m.result) {
+          initResult = m.result;
           send({ jsonrpc: '2.0', method: 'notifications/initialized' });
           send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
         } else if (m.id === 2 && m.result && m.result.tools) {
           done = true; clearTimeout(timer);
           try { child.kill(); } catch {}
-          resolve({ serverInfo: m.result.serverInfo || null, tools: (m.result.tools || []).map(t => t.name), capabilities: m.result.capabilities || null, polluted, stderr: errBuf });
+          resolve({
+            serverInfo: (initResult && initResult.serverInfo) || null,
+            capabilities: (initResult && initResult.capabilities) || null,
+            protocolVersion: (initResult && initResult.protocolVersion) || null,
+            tools: (m.result.tools || []).map(t => t.name),
+            polluted,
+            stderr: errBuf
+          });
         }
       }
     });
@@ -133,9 +157,14 @@ async function main() {
     }
     const r = await run(entry, timeoutMs);
     console.log('✅ 握手成功');
-    console.log('serverInfo:', JSON.stringify(r.serverInfo));
-    console.log('tools:', r.tools.join(', ') || '(无工具)');
-    if (r.capabilities) console.log('capabilities:', JSON.stringify(r.capabilities));
+    if (r.serverInfo) {
+      console.log('serverInfo:', (r.serverInfo.name || '?') + ' v' + (r.serverInfo.version || '?'));
+    } else {
+      console.log('serverInfo: (服务端未返回，非致命)');
+    }
+    if (r.protocolVersion) console.log('protocolVersion:', r.protocolVersion);
+    console.log(`tools: ${r.tools.length} 个  ${r.tools.join(', ') || '(无工具)'}`);
+    if (r.capabilities) console.log('capabilities:', Object.keys(r.capabilities).join(', ') || '(空)');
     if (r.polluted && r.polluted.length) {
       console.warn(`⚠️ stdout 被 ${r.polluted.length} 行非协议内容污染（协议流要求每行都是 JSON-RPC）：`);
       r.polluted.slice(0, 2).forEach(l => console.warn('   ' + l.slice(0, 120)));
@@ -181,8 +210,13 @@ async function main() {
         console.warn('   在实际宿主里会崩在握手前。建议补上 env: ' + JSON.stringify(PY_ENV));
       }
       try {
-        await run(entry, probeMs, { envOverride: GBK_ENV });
-        console.log('✅ 强制 GBK 仍能握手：源码本身 UTF-8 安全，无隐患');
+        const rg = await run(entry, probeMs, { envOverride: GBK_ENV });
+        // 准确口径：这里只能证明「协议流没被编码问题挡住」，不能反推源码没有编码隐患。
+        console.log('✅ 强制 GBK 仍能握手：协议流（stdin/stdout 的 JSON-RPC）不受编码影响');
+        if (rg && /[\uFFFD]/.test(rg.stderr || '')) {
+          console.warn('ℹ️ 但 stderr 日志在 GBK 下已乱码（不影响功能，只影响排错时可读性）。');
+          console.warn('   想看清日志：临时设 PYTHONIOENCODING=utf-8 手动跑，或把日志里非 ASCII 字符改成 ASCII。');
+        }
       } catch (e2) {
         const msg = String((e2 && e2.message) || '');
         if (/UnicodeEncodeError/.test(msg)) {
