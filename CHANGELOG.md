@@ -12,6 +12,16 @@
 
 ---
 
+## [Unreleased]
+
+**维护者发版脚本 `scripts/publish.js`（打包时自动排除，不随技能分发）**
+
+- **解决平台拒收 `.gitignore`**：原来发布要手动把 `.gitignore` 移出目录、发完再移回，容易忘。现在改为复制到临时目录时直接排除开发期文件（`.gitignore`、`.git*`、`node_modules`、`*.log/*.tmp/*.bak`、脚本自身），源目录一个字节都不动。
+- **发版前版本校验**：`SKILL.md` 与 `skill.manifest.json` 版本不一致时直接失败；`--version` 与文件内版本不一致也失败（防版本漂移，`--force` 可绕过）；缺 `v<版本>` tag 或 tag 未推送只告警不阻断；工作区有未提交改动会提示。
+- **changelog 自动生成**：不传 `--changelog` 时，从 `CHANGELOG.md` 对应版本段落提取，按「整节累积」在要点边界截断（默认 400 字），不会把一句话切一半；也可 `--changelog "..."` 手填。
+- **用法**：`node scripts/publish.js [--dry-run] [--changelog "…"] [--max-chars 400] [--keep] [--force]`；python 与 CLI 路径可自动探测，也可 `--python` / `--cli` 或 `SKILLHUB_PYTHON` / `SKILLHUB_CLI` 指定。
+- **实测**：`--dry-run` 通过（14 个文件，`.gitignore` 与脚本自身已排除）；`--version 1.4.9` 被拦并返回退出码 1；自动 changelog 提取 428 字，末尾落在完整要点上。
+
 ## [1.4.1] — 2026-11-02
 
 **补齐 uvx 类 MCP 的启动失败根因、服务名合法性与 dry-run 脱敏**
