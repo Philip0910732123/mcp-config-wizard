@@ -21,6 +21,19 @@
 - **changelog 自动生成**：不传 `--changelog` 时，从 `CHANGELOG.md` 对应版本段落提取，按「整节累积」在要点边界截断（默认 400 字），不会把一句话切一半；也可 `--changelog "..."` 手填。
 - **用法**：`node scripts/publish.js [--dry-run] [--changelog "…"] [--max-chars 400] [--keep] [--force]`；python 与 CLI 路径可自动探测，也可 `--python` / `--cli` 或 `SKILLHUB_PYTHON` / `SKILLHUB_CLI` 指定。
 - **实测**：`--dry-run` 通过（14 个文件，`.gitignore` 与脚本自身已排除）；`--version 1.4.9` 被拦并返回退出码 1；自动 changelog 提取 428 字，末尾落在完整要点上。
+- **暂存目录可写性兜底**：环境变量被裁剪时 `os.tmpdir()` 可能指向不可写的 `C:\WINDOWS\temp`，新增 `resolveStageRoot()` 依次试探 `tmpdir` → `~/.cache` → 技能目录。
+
+**一键发版脚本 `scripts/release.sh`（同样不随技能分发）**
+
+把"发布平台 + 提交 + 打 tag + 推送 + 建 Release + 回验"固化成一条命令，并把过去真实踩过的坑做前置校验：
+
+- **顺序改为"先发布成功，再动 git"**：平台发布失败时 git 零改动，可直接重跑，不会留下"提交了但没发出去"的半成品状态。
+- **六道前置校验**：版本号三处一致（`SKILL.md` / `skill.manifest.json` / 命令行）、`CHANGELOG.md` 必须有 `## [x.y.z]` 段落、tag 未被本地或远端占用、平台最新版不是同版本、全部 JS 脚本 `node --check` 通过、打包预检通过。
+- **changelog 与 Release 说明同源**：commit 主题取该版本段落首句，commit 正文与 GitHub Release 正文取整段 markdown，不再手工复制。
+- **收尾回验**：比对本地 tag 与远端 tag 缩写，并查询平台 `latestVersion`；若仍是旧版本则提示"审核中"。
+- **嵌套调用环境修复**：Git Bash 被 CI / 助手二次调用时会丢掉 `USERPROFILE` 与 `TEMP`，而 Windows 上的 Python 取家目录只认 `USERPROFILE`，缺了会让 skillhub CLI 崩在 `Could not determine home directory`；脚本内自行补齐这两个变量。
+- **用法**：`bash scripts/release.sh [版本] [--dry-run] [--yes] [--skip-github] [--skip-platform]`；`--help` 查看全部参数。
+- **`.gitattributes`**：强制 `*.sh` / `*.js` 用 LF，避免 Windows 的 `core.autocrlf` 把脚本换成 CRLF 后在 Git Bash 里报 `bad interpreter`。
 
 ## [1.4.1] — 2026-11-02
 

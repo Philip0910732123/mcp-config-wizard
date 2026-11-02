@@ -35,7 +35,7 @@ const SKILL_DIR = path.resolve(__dirname, '..');
 
 // 打包时排除：开发期文件与版本控制产物，以及本脚本自身（维护者工具，用户不需要）
 const EXCLUDE_DIRS = new Set(['.git', '.github', 'node_modules', '__pycache__', '.idea', '.vscode']);
-const EXCLUDE_FILES = new Set(['.gitignore', '.gitattributes', '.DS_Store', 'Thumbs.db', 'publish.js']);
+const EXCLUDE_FILES = new Set(['.gitignore', '.gitattributes', '.DS_Store', 'Thumbs.db', 'publish.js', 'release.sh']);
 const EXCLUDE_SUFFIX = ['.log', '.tmp', '.bak', '.pyc'];
 
 const C = {
@@ -152,6 +152,21 @@ function git(args) {
   return r.status === 0 ? (r.stdout || '').trim() : null;
 }
 
+/** 选一个真的能写的暂存根目录：环境变量被裁剪时 os.tmpdir() 可能指向不可写的 C:\WINDOWS\temp */
+function resolveStageRoot() {
+  const candidates = [os.tmpdir(), path.join(os.homedir(), '.cache', 'mw-publish'), SKILL_DIR];
+  for (const c of candidates) {
+    try {
+      fs.mkdirSync(c, { recursive: true });
+      fs.accessSync(c, fs.constants.W_OK);
+      return c;
+    } catch {
+      /* 换下一个 */
+    }
+  }
+  die('找不到可写的临时目录，可用 TMPDIR 指定');
+}
+
 /** 探测 python：显式参数 > 环境变量 > WorkBuddy 自带 env > PATH */
 function resolvePython(explicit) {
   if (explicit) return explicit;
@@ -256,7 +271,7 @@ function main() {
   }
 
   // 暂存打包（源目录不改动，.gitignore 在此被排除）
-  const stageDir = path.join(os.tmpdir(), `mw-publish-${version}-${Date.now()}`);
+  const stageDir = path.join(resolveStageRoot(), `mw-publish-${version}-${Date.now()}`);
   const files = stage(stageDir);
   console.log(C.bold(`\n=== 待上传文件（${files.length}）===`));
   for (const f of files) console.log('  ' + f);

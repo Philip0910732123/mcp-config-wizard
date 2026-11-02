@@ -1,0 +1,3 @@
+# 换行符：脚本必须 LF，否则在 Git Bash / macOS 下会因 \r 报 "bad interpreter"
+*.sh  text eol=lf
+*.js  text eol=lf
