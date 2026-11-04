@@ -18,8 +18,9 @@
 
 > 许可变更仅对 v1.4.3 起的版本生效。v1.4.2 及更早版本已按 MIT 授权发出的副本，其授权不可撤回。
 
-- **新增 `LICENSE`**：Apache License 2.0 全文。此前仓库只有 `SKILL.md` frontmatter 里的 `license: MIT`，**没有 LICENSE 文件**——形式声明缺少可执行文本，维权时无法举证具体条款。
-- **新增 `NOTICE`**：按 Apache-2.0 §4(d) 明确三项必须保留的归属信息（著作权人、项目名、仓库地址），并说明更名后的衍生作品同样适用。附商标与第三方组件说明。
+- **新增 `LICENSE.txt`**：Apache License 2.0 全文。此前仓库只有 `SKILL.md` frontmatter 里的 `license: MIT`，**没有 LICENSE 文件**——形式声明缺少可执行文本，维权时无法举证具体条款。
+- **新增 `NOTICE.txt`**：按 Apache-2.0 §4(d) 明确三项必须保留的归属信息（著作权人、项目名、仓库地址），并说明更名后的衍生作品同样适用。附商标与第三方组件说明。
+- **两文件带 `.txt` 扩展名**：SkillHub 的类型白名单拒绝无扩展名文件（`不允许的文件类型: .gitattributes` / `LICENSE`），带扩展名后 GitHub 仍自动识别为 Apache-2.0，两侧分发逐字节一致。发布时还需剔除 `.gitattributes`、`.gitignore` 等 VCS 元文件。
 - **`SKILL.md` 新增 §11「来源与授权」**：把"允许什么 / 再分发必须做什么 / 更名场景怎么认定"写成可引用条款，并公布文件指纹 `MCPWIZ-FP-2026-HUPAN-7C41`。
 - **9 个脚本与模板统一加版权头**：`scripts/` 下 8 个文件 + `templates/local-index.js`，每份含 `SPDX-License-Identifier`、仓库地址与指纹。全部通过 `node --check` / `bash -n` 语法校验。
 - **原因**：MIT 仅要求保留版权声明，不禁止改名与商用，对本项目的实际风险（他人改名后作为自己的作品发布）几乎没有约束力。Apache-2.0 在两点上更强：§4(b) 要求修改过的文件显著标注"已被修改"（更名即修改），§4(d) 要求保留 NOTICE 归属；同时保留商用自由与专利授权，不影响 skill 的正常分发与客户使用。

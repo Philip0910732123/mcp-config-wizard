@@ -2,7 +2,7 @@
 
 /* mcp-config-wizard · Copyright 2026 hupan · SPDX-License-Identifier: Apache-2.0
  * https://github.com/Philip0910732123/mcp-config-wizard
- * 再分发或更名分发须保留本声明与仓库地址（见 LICENSE / NOTICE）。
+ * 再分发或更名分发须保留本声明与仓库地址（见 LICENSE.txt / NOTICE.txt）。
  * fingerprint: MCPWIZ-FP-2026-HUPAN-7C41 */
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
  * probe_mcp_http.js —— streamableHttp（远端）MCP 连接器协议级实测

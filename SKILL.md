@@ -491,8 +491,8 @@ WorkBuddy 只认 `~/.workbuddy/mcp.json`（单文件、用户级、无 project s
 |---|---|
 | 原仓库 | `https://github.com/Philip0910732123/mcp-config-wizard` |
 | 著作权人 | hupan（GitHub: Philip0910732123） |
-| 许可 | Apache License 2.0，全文见 `LICENSE` |
-| 归属声明要求 | 见 `NOTICE` |
+| 许可 | Apache License 2.0，全文见 `LICENSE.txt` |
+| 归属声明要求 | 见 `NOTICE.txt` |
 | 文件指纹 | `MCPWIZ-FP-2026-HUPAN-7C41` |
 
 ### 11.1 允许什么
@@ -503,8 +503,8 @@ Apache-2.0 允许你自由使用、修改、再分发本 skill，包括用于商
 
 以下四条是许可的强制条件，不是建议：
 
-1. **附上 LICENSE 全文**，接收方要能拿到。
-2. **保留 NOTICE 中的归属声明**——著作权人、原项目名 `mcp-config-wizard`、原仓库地址，三者在衍生作品里都要能读到。可以放在 LICENSE/NOTICE、README，或作品的"关于"页面。
+1. **附上 LICENSE.txt 全文**，接收方要能拿到。
+2. **保留 NOTICE.txt 中的归属声明**——著作权人、原项目名 `mcp-config-wizard`、原仓库地址，三者在衍生作品里都要能读到。可以放在 LICENSE.txt/NOTICE.txt、README，或作品的"关于"页面。
 3. **修改过的文件要显著标注"已被修改"**。这一条对更名场景尤其关键：改名本身属于修改，所以更名后的版本必须同时说明它基于 `mcp-config-wizard` 修改而来。
 4. **不得暗示原作者为你的版本背书**，也不得把 `mcp-config-wizard` 当作你自己的产品名使用。
 
