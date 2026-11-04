@@ -1,0 +1,56 @@
+mcp-config-wizard
+Copyright 2026 hupan
+
+This product includes software developed by hupan
+(https://github.com/Philip0910732123/mcp-config-wizard).
+
+Original author: hupan (GitHub: Philip0910732123)
+Project name:   mcp-config-wizard
+Project URL:    https://github.com/Philip0910732123/mcp-config-wizard
+First published: 2026-10-31
+
+--------------------------------------------------------------------------------
+NOTICE ON ATTRIBUTION (required by Apache License 2.0, Section 4(d))
+--------------------------------------------------------------------------------
+
+Any redistribution of this Work, in source or object form, and any Derivative
+Work thereof — including a version that has been renamed — must retain the
+attribution notices above in a readable form. Concretely, a redistributed or
+renamed copy must keep:
+
+  1. the copyright line "Copyright 2026 hupan";
+  2. the project name "mcp-config-wizard"; and
+  3. the project URL https://github.com/Philip0910732123/mcp-config-wizard
+
+in its LICENSE/NOTICE files, its README or documentation, or an "About" screen
+shown by the derivative work.
+
+Renaming the project or replacing the author field does NOT remove this
+obligation. Removing or altering these attribution notices in a redistributed
+copy is a breach of the License and an infringement of the author's moral rights
+under applicable copyright law (including Article 10 of the Copyright Law of
+the People's Republic of China).
+
+--------------------------------------------------------------------------------
+TRADEMARK
+--------------------------------------------------------------------------------
+
+The name "mcp-config-wizard" and the author's name are not licensed as
+trademarks under Apache License 2.0, Section 6. You may use them to describe the
+origin of the Work, but not to imply endorsement, and not as the name of your
+own product in a way that suggests you are the original author.
+
+--------------------------------------------------------------------------------
+THIRD-PARTY COMPONENTS
+--------------------------------------------------------------------------------
+
+This Work contains no bundled third-party source code. It invokes, but does not
+redistribute, the following external tools at the user's direction:
+
+  - Node.js (MIT) — https://nodejs.org
+  - npm / npx (Artistic-2.0)
+  - uv / uvx (Apache-2.0 / MIT) — https://github.com/astral-sh/uv
+  - and whichever MCP server packages the user chooses to install
+
+External MCP servers installed through this tool remain under their own
+licenses; this Work claims no rights over them.

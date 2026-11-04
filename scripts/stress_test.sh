@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# mcp-config-wizard · Copyright 2026 hupan · SPDX-License-Identifier: Apache-2.0
+# https://github.com/Philip0910732123/mcp-config-wizard
+# 再分发或更名分发须保留本声明与仓库地址（见 LICENSE / NOTICE）。
+# fingerprint: MCPWIZ-FP-2026-HUPAN-7C41
 # stress_test.sh — mcp-config-wizard 脚本回归压测（一键）
 #
 # 用途：

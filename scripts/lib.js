@@ -1,3 +1,7 @@
+/* mcp-config-wizard · Copyright 2026 hupan · SPDX-License-Identifier: Apache-2.0
+ * https://github.com/Philip0910732123/mcp-config-wizard
+ * 再分发或更名分发须保留本声明与仓库地址（见 LICENSE / NOTICE）。
+ * fingerprint: MCPWIZ-FP-2026-HUPAN-7C41 */
 'use strict';
 // lib.js — MCP 配置向导共享工具（纯 Node，无第三方依赖）
 // 提供：源码补丁（应对"需要修源码才能跑"的包，如非标准 experimental 能力广播）、
