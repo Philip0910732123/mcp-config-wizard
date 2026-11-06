@@ -3,7 +3,7 @@ name: mcp-config-wizard
 description: 面向生物医药研发场景，把"选什么/审什么"（决策）与"怎么装进 WorkBuddy / 装完到底通不通"（执行+验证）合二为一。覆盖：按需选型清单（商业 SaaS 情报类 + 化学/靶点/临床/结构等科学数据 MCP，几十个也能管）、安装前安全审查、配置进 WorkBuddy（云端 streamableHttp / 本地 stdio 自动脚手架）、**远端协议级深验（鉴权形态自动识别 → 真对照 → 会话 → tools/list → 真实调用）**、多 MCP 治理与排错。触发词：配置 MCP、加一个 MCP 服务、MCP 选型、MCP 安全吗、MCP 配不上、MCP 连不上、工具没出现、这个连接器正常吗、令牌是不是有效、工具中文乱码、Connection closed、Unknown or missing Mcp-Session-Id、MCP 太多怎么管、配置 PDB/ChEMBL/智慧芽、给 AI 接数据源/API。不适用于：MCP 服务端源码开发/从零编写（本 skill 只做接入与治理，不写服务本身）、非 WorkBuddy 平台的 MCP 配置（路径与入口不同）、纯理论科普而不落地配置。
 slug: mcp-config-wizard
 displayName: MCP 选型与配置向导
-version: 1.4.4
+version: 1.4.5
 summary: 生物医药研发场景的 MCP 选型、安全审查、一键配置与协议级实测验证；覆盖 stdio / streamableHttp 接入、四种鉴权形态的真对照、多 MCP 治理排错。
 license: Apache-2.0
 ---
@@ -329,6 +329,11 @@ node scripts/verify_mcp.js --name <服务名> --harden
 - **若返回里出现非标准 `capabilities.experimental`**（非空对象才算）：说明该服务器广播了严格宿主会拒绝的能力，加 `--harden` 让向导自动剥离并重新编译、再握手复验。已知如 `openpharma-org/fda-mcp-server`。
   > 注：`experimental: {}`（空对象）是合法的，脚本**不会**误报，也不需要硬化。
 - `initialize` 被明确拒绝（返回 JSON-RPC error）时会直接报协议层错误，不会再伪装成「超时」。
+- **临时试用未入 mcp.json 的配置**：`--command <cmd> --args '<JSON 数组>'`。含空格的值、`<` `>` `&` 一律用 JSON 数组写法，不要靠空格分词：
+  ```
+  node scripts/verify_mcp.js --command npx --args '["-y","@cyanheads/uniprot-mcp-server@0.3","--with","mcp<2.0"]'
+  ```
+- Windows 上 `npx` / `npm` 是 `.cmd` 垫片，直接用 `child_process.spawn` 会 `ENOENT`；开 `shell:true` 又会让 `mcp<2.0` 被当成重定向。脚本已用 `spawn-safe.js` 统一处理，无需调用方操心——**不要**在别处再手写 `spawn(cmd)` 启动 MCP。
 
 #### 5.2 远端 streamableHttp（四步实测，不能用 curl 代替）
 ```
@@ -448,6 +453,7 @@ node scripts/probe_mcp_http.js --url "https://h/mcp?apikey=x" # URL 参数型，
 | `verify_mcp.js` | **stdio** 握手 + `capabilities.experimental` 检测（`--harden` 自愈）+ 强制 GBK 编码探测 | `0` 通过 / `1` 握手失败 |
 | `probe_mcp_http.js` | **streamableHttp** 四步实测（真对照 / session / tools/list / 真实调用），也是会话失效时的旁路客户端 | `0` 通过 / `1` 握手失败 / `2` 工具或调用失败 |
 | `lib.js` / `lang.js` | 共享工具：源码补丁、capabilities 硬化、运行时识别与依赖安装 | — |
+| `spawn-safe.js` | 共享启动器：Windows 上把 `npx`/`npm` 这类 `.cmd` 垫片转成 `node <npm-cli.js>` 启动，参数逐字保真（含空格路径、`mcp<2.0`） | — |
 
 ```bash
 NODE=C:/Users/<用户名>/.workbuddy/binaries/node/versions/<ver>/node.exe   # 自查：where node

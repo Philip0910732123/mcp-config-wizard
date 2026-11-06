@@ -7,7 +7,7 @@
 # stress_test.sh — mcp-config-wizard 脚本回归压测（一键）
 #
 # 用途：
-#   每次改完 scaffold_mcp.js / verify_mcp.js 后，一键跑 14 个边界用例，确认行为未退化。
+#   每次改完 scaffold_mcp.js / verify_mcp.js 后，一键跑 21 个边界用例，确认行为未退化。
 #   这是 skill 的「机械层」验证（脚本契约的回归），不含 SKILL.md 决策树/路由的
 #   LLM 角色扮演验收（那层需人工或对话驱动）。
 #
@@ -75,6 +75,12 @@ process.stdin.on('data', d => {
 });
 EOF
   printf '{\n  "mcpServers": {\n    "present": {"type":"streamableHttp","url":"https://example.com/mcp","disabled":false},\n    "cloudentry": {"type":"streamableHttp","url":"https://example.com/cloud","disabled":false},\n    "mock": {"command":"node","args":["%s/mock_server.js"],"disabled":false}\n  }\n}\n' "$ROOT" > "$ROOT/mcp_test.json"
+
+  # 含空格的目录：验证 --args 用 JSON 数组时路径不被切碎
+  mkdir -p "$ROOT/space dir"
+  cp "$ROOT/mock_server.js" "$ROOT/space dir/mock_server.js"
+  # .cmd 垫片：模拟 npx 那类批处理包装，验证 cmd.exe 兜底路径能真正拉起服务
+  printf '@ECHO OFF\r\nnode "%%~dp0mock_server.js" %%*\r\n' > "$ROOT/shim.cmd"
 }
 
 PASS=0
@@ -117,6 +123,13 @@ main() {
   run_test "V2 条目非 stdio（无 command）" "ERR:不是 stdio 类型" "" node "$VR" --name cloudentry --mcp-json "$ROOT/mcp_test.json"
   run_test "V3 命令立即退出（超时）" "ERR:超时" "" node "$VR" --command node --args '-e process.exit(1)' --timeout 2500 --mcp-json "$MJ"
   run_test "V4 真实模拟服务器握手" "OK" "ping, echo" node "$VR" --name mock --mcp-json "$ROOT/mcp_test.json"
+  # V5/V5b 覆盖 Windows 启动路径：npx 这类 .cmd 垫片不开 shell 会 ENOENT；开 shell 又会丢参数。
+  # 这里用「含空格的目录」与「自定义 .cmd 垫片」两个夹具把两条路径都压住。
+  run_test "V5 --args 含空格路径（JSON 数组写法）" "OK" "ping, echo" node "$VR" --command node --args "[\"$ROOT/space dir/mock_server.js\"]" --mcp-json "$MJ"
+  run_test "V5b .cmd 垫片经 cmd.exe 兜底启动" "OK" "ping, echo" node "$VR" --command "$ROOT/shim.cmd" --mcp-json "$MJ"
+  run_test "V6 未知命令给出中文诊断" "ERR:找不到可执行文件" "" node "$VR" --command no-such-cmd-xyz
+  run_test "V7 --args 非法 JSON 报可读错误" "ERR:JSON 数组但解析失败" "" node "$VR" --command node --args '["a",]'
+  run_test "V8 --args 引号未闭合" "ERR:引号没有闭合" "" node "$VR" --command node --args '-e "abc'
 
   echo "----------------------------------------"
   echo "结果：$PASS / $TOTAL 通过"

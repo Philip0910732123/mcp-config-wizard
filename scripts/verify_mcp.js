@@ -13,6 +13,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const lib = require('./lib');
+const { buildSpawn, parseArgList } = require('./spawn-safe');
 
 function parseArgs(argv) {
   const a = {};
@@ -56,8 +57,17 @@ function run(entry, timeoutMs, opts) {
   opts = opts || {};
   return new Promise((resolve, reject) => {
     let child;
+    // Windows 上 npx/npm 是 .cmd 垫片，直接 spawn 会 ENOENT；开 shell 又会让含空格或 < 的
+    // 实参被 cmd.exe 重新解释。buildSpawn 负责选出「参数逐字保真」的启动方式。
+    let launch;
     try {
-      child = spawn(entry.command, entry.args || [], {
+      launch = buildSpawn(entry.command, entry.args || []);
+    } catch (e) {
+      return reject(e);
+    }
+    try {
+      child = spawn(launch.command, launch.args, {
+        ...launch.options,
         env: { ...process.env, ...(entry.env || {}), ...(opts.envOverride || {}) },
         stdio: ['pipe', 'pipe', 'pipe']
       });
@@ -90,7 +100,11 @@ function run(entry, timeoutMs, opts) {
           `   注意：在 Git Bash / 终端里手动跑同一份代码通常不报错（终端是 UTF-8），这不代表宿主里没问题。`
         ));
       }
-      reject(new Error(`超时（${timeoutMs}ms 无响应）。可能原因：包名错/缺 bin/env 没配/node 不在 PATH。stderr: ${errBuf.slice(-500)}`));
+      const hint = /Cannot find module|MODULE_NOT_FOUND|ENOENT/.test(errBuf)
+        ? '\n   提示：若 --args 里有含空格的值（如 "C:\\Program Files\\x.js"），空格会被当成分隔符切成两段。' +
+          '\n   改用 JSON 数组写法即可：--args \'["C:/Program Files/x.js","--flag"]\''
+        : '';
+      reject(new Error(`超时（${timeoutMs}ms 无响应）。可能原因：包名错/缺 bin/env 没配/node 不在 PATH。stderr: ${errBuf.slice(-500)}${hint}`));
     }, timeoutMs);
 
     child.stderr.on('data', d => { errBuf += d.toString(); });
@@ -155,9 +169,24 @@ async function main() {
       const mcpPath = a['mcp-json'] || path.join(os.homedir(), '.workbuddy', 'mcp.json');
       entry = resolveFromMcpJson(a.name, mcpPath);
     } else if (a.command) {
-      entry = { command: a.command, args: a.args ? a.args.split(/\s+/) : [], env: a.env ? JSON.parse(a.env) : {} };
+      entry = {
+        command: a.command,
+        args: parseArgList(a.args),
+        env: a.env ? JSON.parse(a.env) : {}
+      };
     } else {
-      console.error('用法: --name <serverName> [--mcp-json <p>] | --command <cmd> [--args <a>] [--env <json>]');
+      console.error(
+        '用法:\n' +
+        '  node scripts/verify_mcp.js --name <serverName> [--mcp-json <p>] [--timeout <ms>] [--harden]\n' +
+        '  node scripts/verify_mcp.js --command <cmd> [--args <JSON 数组>] [--env <JSON>] [--timeout <ms>]\n' +
+        '\n' +
+        '--args 推荐用 JSON 数组，能无损表达含空格、<、>、引号的值：\n' +
+        '  --args \'["-y","@cyanheads/uniprot-mcp-server@0.3","--with","mcp<2.0"]\'\n' +
+        '  也接受带引号的空格分词：--args \'-y pkg --flag "值 带空格"\'\n' +
+        '\n' +
+        'npx / npm 这类 .cmd 垫片会自动转成 node <npm-cli.js> 启动，参数逐字传递。\n' +
+        '在 bash / cmd 里，含 <、空格或引号的整串必须整体加引号，否则会被 shell 先解释掉。'
+      );
       process.exit(1);
     }
     const r = await run(entry, timeoutMs);

@@ -14,6 +14,7 @@ const path = require('path');
 const { spawnSync, spawn } = require('child_process');
 const lib = require('./lib');
 const lang = require('./lang');
+const { buildSpawn } = require('./spawn-safe');
 
 function usage() {
   console.log(`MCP 配置向导 · scaffold_mcp.js
@@ -281,8 +282,16 @@ function extractZip(zip, dest) {
 // 否则自检跑的环境和宿主实际跑的环境不一致，会给出假阴性/假阳性。
 function selfCheck(spawnCmd, timeoutMs = 30000, extraEnv = {}) {
   return new Promise((resolve) => {
-    let child;
-    try { child = spawn(spawnCmd[0], spawnCmd.slice(1), { env: { ...process.env, ...extraEnv }, stdio: ['pipe', 'pipe', 'pipe'] }); }
+    let child, launch;
+    try { launch = buildSpawn(spawnCmd[0], spawnCmd.slice(1)); }
+    catch (e) { return resolve({ ok: false, error: e.message }); }
+    try {
+      child = spawn(launch.command, launch.args, {
+        ...launch.options,
+        env: { ...process.env, ...extraEnv },
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+    }
     catch (e) { return resolve({ ok: false, error: e.message }); }
     let buf = '', done = false;
     let errBuf = '';
