@@ -1,6 +1,6 @@
 {
   "name": "mcp-config-wizard",
-  "version": "1.4.5",
+  "version": "1.4.6",
   "description": "生物医药研发场景的 MCP 选型、安全审查、一键配置与协议级实测验证；本地包按运行时类型自动识别（Node/Python/Go/Rust/Java/.NET），远端按四种鉴权形态做真对照，写入前备份 + 原子替换。",
   "author": "hupan",
   "alias": "mcp-config-wizard",
